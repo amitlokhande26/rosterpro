@@ -95,6 +95,10 @@ export interface ProductionJob {
   divider_required: boolean;
   floater_required: boolean;
   optional_resource_reason: string | null;
+  quantity_ordered: number | null;
+  outer_pack_size: number | null;
+  outer_pack_label: string | null;
+  total_quantity: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -141,6 +145,10 @@ export interface ProductionJobInput {
   divider_required?: boolean;
   floater_required?: boolean;
   optional_resource_reason?: string;
+  quantity_ordered?: number | null;
+  outer_pack_size?: number | null;
+  outer_pack_label?: string | null;
+  total_quantity?: number | null;
 }
 
 export interface ShiftTouch {

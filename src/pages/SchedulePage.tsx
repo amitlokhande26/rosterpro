@@ -10,8 +10,20 @@ import {
   formatShiftTime,
   getShiftsTouchedByJob,
 } from '@/services/calculationEngine';
+import {
+  resolveJobQuantities,
+  isKeggingLine,
+  isPackBasedLine,
+  PACK_SIZE_OPTIONS,
+  formatQuantityDisplay,
+  parseOuterPackSize,
+} from '@/services/quantityService';
 import { OcrUploadModal } from '@/components/OcrUploadModal';
 import type { ProductionJobInput } from '@/lib/types';
+
+function withQuantities(form: ProductionJobInput, lineName: string): ProductionJobInput {
+  return { ...form, ...resolveJobQuantities(lineName, form) };
+}
 
 const emptyForm: ProductionJobInput = {
   production_line_id: '',
@@ -35,6 +47,15 @@ export function SchedulePage() {
   const [saving, setSaving] = useState(false);
 
   const lineMap = useMemo(() => new Map(lines.map((l) => [l.id, l.name])), [lines]);
+  const selectedLineName = lineMap.get(form.production_line_id) ?? '';
+  const showPackFields = isPackBasedLine(selectedLineName);
+  const isKegLine = isKeggingLine(selectedLineName);
+
+  const setFormWithQuantities = (updates: Partial<ProductionJobInput>) => {
+    const lineId = updates.production_line_id ?? form.production_line_id;
+    const lineName = lineMap.get(lineId) ?? '';
+    setForm((prev) => withQuantities({ ...prev, ...updates }, lineName));
+  };
 
   const sortedJobs = useMemo(
     () =>
@@ -83,6 +104,10 @@ export function SchedulePage() {
       divider_required: job.divider_required,
       floater_required: job.floater_required,
       optional_resource_reason: job.optional_resource_reason ?? '',
+      quantity_ordered: job.quantity_ordered,
+      outer_pack_size: job.outer_pack_size,
+      outer_pack_label: job.outer_pack_label,
+      total_quantity: job.total_quantity,
     });
     setEditId(job.id);
     setShowForm(true);
@@ -150,7 +175,7 @@ export function SchedulePage() {
               <label className="block text-sm font-medium text-slate-700">Production Line</label>
               <select
                 value={form.production_line_id}
-                onChange={(e) => setForm({ ...form, production_line_id: e.target.value })}
+                onChange={(e) => setFormWithQuantities({ production_line_id: e.target.value })}
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                 required
               >
@@ -224,6 +249,64 @@ export function SchedulePage() {
               />
             </div>
             <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-medium text-slate-700">Quantity</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {isKegLine
+                  ? 'Kegging: quantity ordered is the number of kegs.'
+                  : showPackFields
+                    ? 'Bottling/Canning: total = quantity ordered × outer pack size (e.g. 500 × 6PK = 3,000 units).'
+                    : 'Select a production line to enter quantity.'}
+              </p>
+              <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600">
+                    {isKegLine ? 'Kegs Ordered' : 'Quantity Ordered'}
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={form.quantity_ordered ?? ''}
+                    onChange={(e) =>
+                      setFormWithQuantities({
+                        quantity_ordered: e.target.value ? parseInt(e.target.value, 10) : null,
+                      })
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    placeholder={isKegLine ? 'e.g. 120' : 'e.g. 500 cases'}
+                  />
+                </div>
+                {showPackFields && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600">Outer Pack</label>
+                    <select
+                      value={form.outer_pack_label ?? ''}
+                      onChange={(e) => {
+                        const label = e.target.value || null;
+                        setFormWithQuantities({
+                          outer_pack_label: label,
+                          outer_pack_size: label ? parseOuterPackSize(label) : null,
+                        });
+                      }}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      <option value="">Select pack...</option>
+                      {PACK_SIZE_OPTIONS.map((pk) => (
+                        <option key={pk} value={pk}>{pk}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label className="block text-xs font-medium text-slate-600">Total Quantity</label>
+                  <p className="mt-2 text-sm font-medium text-slate-800">
+                    {selectedLineName
+                      ? formatQuantityDisplay(selectedLineName, form)
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="text-sm font-medium text-slate-700">Optional Resources</p>
               <div className="mt-3 flex flex-wrap gap-6">
                 <label className="flex items-center gap-2 text-sm">
@@ -276,6 +359,7 @@ export function SchedulePage() {
                   <th className="pb-3 pr-4 font-medium">Start</th>
                   <th className="pb-3 pr-4 font-medium">End</th>
                   <th className="pb-3 pr-4 font-medium">Runtime</th>
+                  <th className="pb-3 pr-4 font-medium">Quantity</th>
                   <th className="pb-3 pr-4 font-medium">Shifts</th>
                   <th className="pb-3 pr-4 font-medium">Options</th>
                   <th className="pb-3 font-medium">Actions</th>
@@ -301,6 +385,9 @@ export function SchedulePage() {
                         {format(parseISO(job.end_datetime), 'EEE dd MMM, h:mm a')}
                       </td>
                       <td className="py-3 pr-4">{job.runtime_hours}h</td>
+                      <td className="py-3 pr-4 text-xs text-slate-600">
+                        {formatQuantityDisplay(lineMap.get(job.production_line_id) ?? '', job)}
+                      </td>
                       <td className="py-3 pr-4">
                         <div className="flex flex-wrap gap-1">
                           {touches.map((t, i) => (

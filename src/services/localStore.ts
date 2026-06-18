@@ -17,6 +17,7 @@ import {
   calculateEndDateTime,
   getShiftsTouchedByJob,
 } from '@/services/calculationEngine';
+import { resolveJobQuantities } from '@/services/quantityService';
 
 const STORAGE_KEY = 'roster_app_data';
 
@@ -169,6 +170,19 @@ function migrateData(data: StoredData): StoredData {
       save(data);
     }
   }
+
+  let migrated = false;
+  for (const job of data.production_jobs) {
+    if (job.quantity_ordered === undefined) {
+      job.quantity_ordered = null;
+      job.outer_pack_size = null;
+      job.outer_pack_label = null;
+      job.total_quantity = null;
+      migrated = true;
+    }
+  }
+  if (migrated) save(data);
+
   return data;
 }
 
@@ -341,6 +355,8 @@ export class LocalDataStore {
   createJob(input: ProductionJobInput): ProductionJob {
     const t = now();
     const endDt = calculateEndDateTime(input.start_date, input.start_time, input.runtime_hours);
+    const line = this.data.production_lines.find((l) => l.id === input.production_line_id);
+    const quantities = resolveJobQuantities(line?.name ?? '', input);
     const job: ProductionJob = {
       id: uuidv4(),
       production_line_id: input.production_line_id,
@@ -353,6 +369,10 @@ export class LocalDataStore {
       divider_required: input.divider_required ?? false,
       floater_required: input.floater_required ?? false,
       optional_resource_reason: input.optional_resource_reason ?? null,
+      quantity_ordered: quantities.quantity_ordered,
+      outer_pack_size: quantities.outer_pack_size,
+      outer_pack_label: quantities.outer_pack_label,
+      total_quantity: quantities.total_quantity,
       created_by: this.data.profile?.id ?? null,
       created_at: t,
       updated_at: t,
@@ -376,6 +396,12 @@ export class LocalDataStore {
       );
       merged.end_datetime = endDt.toISOString();
     }
+    const line = this.data.production_lines.find((l) => l.id === merged.production_line_id);
+    const quantities = resolveJobQuantities(line?.name ?? '', merged);
+    merged.quantity_ordered = quantities.quantity_ordered;
+    merged.outer_pack_size = quantities.outer_pack_size;
+    merged.outer_pack_label = quantities.outer_pack_label;
+    merged.total_quantity = quantities.total_quantity;
     merged.updated_at = now();
     this.data.production_jobs[idx] = merged as ProductionJob;
     this.data.job_shift_requirements = this.data.job_shift_requirements.filter(

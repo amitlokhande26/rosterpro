@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { settingsService } from './settingsService';
+import { parseOuterPackSize } from './quantityService';
 import type { ProductionLine } from '@/lib/types';
 
 export interface AiExtractedJob {
@@ -11,6 +12,9 @@ export interface AiExtractedJob {
   notes?: string;
   divider_required?: boolean;
   floater_required?: boolean;
+  quantity_ordered?: number | null;
+  outer_pack_label?: string | null;
+  outer_pack_size?: number | null;
 }
 
 export interface AiScheduleResult {
@@ -38,6 +42,13 @@ For each job extract:
 - notes: any extra info, or empty string
 - divider_required: true if "Divider" is mentioned for this specific bottling line run (Bottling Line 1 or Bottling Line 2 only). Look for the word "Divider" in the row, product notes, or schedule comments for that run. false otherwise.
 - floater_required: true only if "Floater" is explicitly mentioned for that run on a bottling line, false otherwise
+- quantity_ordered: number of outer packs/cases ordered (or kegs for kegging — see below)
+- outer_pack_label: pack size label such as "6PK", "12PK", "24PK" for bottling and canning lines; null for kegging
+- outer_pack_size: numeric units per outer pack (e.g. 6 for 6PK); null for kegging
+
+QUANTITY rules:
+- Bottling Line 1, Bottling Line 2, Canning Line 1, Canning Line 2: quantity_ordered is the number of cases/outer packs. outer_pack_label is the pack format (6PK = 6 bottles/cans per case). Total units = quantity_ordered × pack size.
+- Kegging Line (or any keg line): quantity_ordered IS the actual number of kegs. Set outer_pack_label and outer_pack_size to null — do NOT multiply by pack size.
 
 IMPORTANT — Divider detection for bottling lines:
 - On Bottling Line 1 and Bottling Line 2 schedules, if the word "Divider" appears anywhere associated with a production run, set divider_required to true for that job.
@@ -54,7 +65,10 @@ Return ONLY valid JSON:
       "runtime_hours": 8,
       "notes": "",
       "divider_required": true,
-      "floater_required": false
+      "floater_required": false,
+      "quantity_ordered": 500,
+      "outer_pack_label": "6PK",
+      "outer_pack_size": 6
     }
   ]
 }
@@ -126,6 +140,9 @@ function parseAiResponse(content: string): AiScheduleResult {
           product_name: String(j.product_name ?? ''),
         }),
         floater_required: Boolean(j.floater_required),
+        quantity_ordered: parseQuantity(j.quantity_ordered),
+        outer_pack_label: j.outer_pack_label ? String(j.outer_pack_label).trim() : null,
+        outer_pack_size: j.outer_pack_size != null ? parseOuterPackSize(j.outer_pack_size) : null,
       };
       return job;
     })
@@ -136,6 +153,12 @@ function parseAiResponse(content: string): AiScheduleResult {
   }
 
   return { jobs, raw_response: content };
+}
+
+function parseQuantity(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  return num > 0 ? num : null;
 }
 
 function normalizeDate(date: string): string {

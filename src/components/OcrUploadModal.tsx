@@ -2,6 +2,14 @@ import { useState, useRef } from 'react';
 import { X, Check, AlertCircle, Camera, FileUp, Sparkles, Trash2 } from 'lucide-react';
 import { Button, Badge } from '@/components/ui';
 import { extractScheduleWithAI, matchLineName, validateScheduleFile } from '@/services/aiScheduleService';
+import {
+  resolveJobQuantities,
+  isKeggingLine,
+  isPackBasedLine,
+  PACK_SIZE_OPTIONS,
+  formatQuantityDisplay,
+  parseOuterPackSize,
+} from '@/services/quantityService';
 import type { ProductionJobInput, ProductionLine } from '@/lib/types';
 import { uuidv4 } from '@/services/uuid';
 
@@ -19,6 +27,13 @@ interface OcrUploadModalProps {
 
 function isImageFile(file: File): boolean {
   return file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(file.name);
+}
+
+function applyQuantityToRow(row: ReviewRow, lines: ProductionLine[]): ReviewRow {
+  const lineName =
+    lines.find((l) => l.id === row.production_line_id)?.name ?? row.detected_line;
+  const quantities = resolveJobQuantities(lineName, row);
+  return { ...row, ...quantities };
 }
 
 export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalProps) {
@@ -61,19 +76,26 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
           (/bottling line/i.test(lineName) &&
             /\bdivider\b/i.test(`${job.product_name} ${job.notes ?? ''}`));
 
-        return {
-          rowId: uuidv4(),
-          detected_line: job.production_line,
-          production_line_id: matched?.id ?? '',
-          product_name: job.product_name,
-          start_date: job.start_date,
-          start_time: job.start_time,
-          runtime_hours: job.runtime_hours,
-          notes: job.notes ?? '',
-          divider_required: dividerRequired,
-          floater_required: job.floater_required ?? false,
-          included: true,
-        };
+        return applyQuantityToRow(
+          {
+            rowId: uuidv4(),
+            detected_line: job.production_line,
+            production_line_id: matched?.id ?? '',
+            product_name: job.product_name,
+            start_date: job.start_date,
+            start_time: job.start_time,
+            runtime_hours: job.runtime_hours,
+            notes: job.notes ?? '',
+            divider_required: dividerRequired,
+            floater_required: job.floater_required ?? false,
+            quantity_ordered: job.quantity_ordered ?? null,
+            outer_pack_label: job.outer_pack_label ?? null,
+            outer_pack_size: job.outer_pack_size ?? null,
+            total_quantity: null,
+            included: true,
+          },
+          lines,
+        );
       });
 
       setReviewRows(rows);
@@ -103,7 +125,10 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
 
   const updateRow = (rowId: string, updates: Partial<ReviewRow>) => {
     setReviewRows((rows) =>
-      rows?.map((r) => (r.rowId === rowId ? { ...r, ...updates } : r)) ?? null,
+      rows?.map((r) => {
+        if (r.rowId !== rowId) return r;
+        return applyQuantityToRow({ ...r, ...updates }, lines);
+      }) ?? null,
     );
   };
 
@@ -239,6 +264,8 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
                   </p>
                   <p className="mt-1">
                     Divider is auto-detected for bottling lines when mentioned in the schedule.
+                    Quantity: bottling/canning = ordered × pack size (e.g. 500 × 6PK = 3,000 bottles).
+                    Kegging = ordered quantity is keg count.
                   </p>
                 </div>
               </div>
@@ -255,7 +282,7 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
               )}
 
               <div className="overflow-x-auto rounded-lg border border-slate-200">
-                <table className="w-full min-w-[800px] text-sm">
+                <table className="w-full min-w-[1000px] text-sm">
                   <thead className="bg-slate-50 text-left text-slate-600">
                     <tr>
                       <th className="px-3 py-2 font-medium">Import</th>
@@ -264,6 +291,9 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
                       <th className="px-3 py-2 font-medium">Date</th>
                       <th className="px-3 py-2 font-medium">Time</th>
                       <th className="px-3 py-2 font-medium">Hours</th>
+                      <th className="px-3 py-2 font-medium">Qty Ordered</th>
+                      <th className="px-3 py-2 font-medium">Pack</th>
+                      <th className="px-3 py-2 font-medium">Total</th>
                       <th className="px-3 py-2 font-medium">Divider</th>
                       <th className="px-3 py-2" />
                     </tr>
@@ -272,6 +302,8 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
                     {reviewRows.map((row) => {
                       const lineName = lines.find((l) => l.id === row.production_line_id)?.name ?? '';
                       const isBottling = /bottling line/i.test(lineName);
+                      const showPack = isPackBasedLine(lineName);
+                      const isKeg = isKeggingLine(lineName);
                       return (
                         <tr key={row.rowId} className="border-t border-slate-100">
                           <td className="px-3 py-2">
@@ -330,6 +362,49 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
                               }
                               className="w-16 rounded border border-slate-300 px-2 py-1"
                             />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="number"
+                              min="1"
+                              placeholder={isKeg ? 'Kegs' : 'Cases'}
+                              value={row.quantity_ordered ?? ''}
+                              onChange={(e) =>
+                                updateRow(row.rowId, {
+                                  quantity_ordered: e.target.value
+                                    ? parseInt(e.target.value, 10)
+                                    : null,
+                                })
+                              }
+                              className="w-20 rounded border border-slate-300 px-2 py-1"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            {showPack ? (
+                              <select
+                                value={row.outer_pack_label ?? ''}
+                                onChange={(e) => {
+                                  const label = e.target.value || null;
+                                  updateRow(row.rowId, {
+                                    outer_pack_label: label,
+                                    outer_pack_size: label ? parseOuterPackSize(label) : null,
+                                  });
+                                }}
+                                className="w-20 rounded border border-slate-300 px-1 py-1 text-xs"
+                              >
+                                <option value="">—</option>
+                                {PACK_SIZE_OPTIONS.map((pk) => (
+                                  <option key={pk} value={pk}>{pk}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className="text-xs text-slate-400">
+                                {isKeg ? 'kegs' : '—'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-slate-600">
+                            {formatQuantityDisplay(lineName, row)}
                           </td>
                           <td className="px-3 py-2">
                             {isBottling ? (
