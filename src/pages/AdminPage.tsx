@@ -68,27 +68,13 @@ export function AdminPage() {
         <p className="text-slate-500">Manage shifts, production lines, staffing templates, and AI</p>
       </div>
 
-      <Card title="AI Settings" subtitle="Free — reads schedules from photos">
+      <Card title="AI Settings" subtitle="Key loaded from .env or saved here">
         <div className="space-y-3">
           <p className="text-sm text-slate-600">
-            Uses <strong>Google Gemini</strong> (free tier) to read your full production schedule
-            from one screenshot or photo. No credit card required.
+            Gemini AI reads schedules from photos, PDF, and Excel. The API key is loaded from
+            your local <code className="rounded bg-slate-100 px-1">.env</code> file, or you can
+            save an override below.
           </p>
-          <ol className="list-inside list-decimal space-y-1 text-sm text-slate-600">
-            <li>
-              Go to{' '}
-              <a
-                href="https://aistudio.google.com/apikey"
-                target="_blank"
-                rel="noreferrer"
-                className="font-medium text-wine-600 underline"
-              >
-                aistudio.google.com/apikey
-              </a>
-            </li>
-            <li>Sign in with Google and click &quot;Create API key&quot;</li>
-            <li>Paste the key below and save</li>
-          </ol>
           <div className="flex flex-wrap gap-2">
             <input
               type="password"

@@ -1,3 +1,4 @@
+import * as XLSX from 'xlsx';
 import { settingsService } from './settingsService';
 import type { ProductionLine } from '@/lib/types';
 
@@ -8,6 +9,8 @@ export interface AiExtractedJob {
   start_time: string;
   runtime_hours: number;
   notes?: string;
+  divider_required?: boolean;
+  floater_required?: boolean;
 }
 
 export interface AiScheduleResult {
@@ -17,7 +20,7 @@ export interface AiScheduleResult {
 
 const PROMPT = `You are a production schedule data extractor for a wine bottling and packaging facility.
 
-Read the uploaded schedule image and extract EVERY production job visible — there may be multiple lines and products in one image.
+Read the uploaded schedule (image, PDF, or spreadsheet data) and extract EVERY production job visible.
 
 Valid production line names (match as closely as possible):
 - Bottling Line 1
@@ -33,8 +36,14 @@ For each job extract:
 - start_time: HH:mm 24-hour format
 - runtime_hours: decimal number of hours
 - notes: any extra info, or empty string
+- divider_required: true if "Divider" is mentioned for this specific bottling line run (Bottling Line 1 or Bottling Line 2 only). Look for the word "Divider" in the row, product notes, or schedule comments for that run. false otherwise.
+- floater_required: true only if "Floater" is explicitly mentioned for that run on a bottling line, false otherwise
 
-Return ONLY valid JSON in this exact shape:
+IMPORTANT — Divider detection for bottling lines:
+- On Bottling Line 1 and Bottling Line 2 schedules, if the word "Divider" appears anywhere associated with a production run, set divider_required to true for that job.
+- This means an extra Divider staff member is needed for that shift.
+
+Return ONLY valid JSON:
 {
   "jobs": [
     {
@@ -43,12 +52,18 @@ Return ONLY valid JSON in this exact shape:
       "start_date": "2026-06-16",
       "start_time": "08:00",
       "runtime_hours": 8,
-      "notes": ""
+      "notes": "",
+      "divider_required": true,
+      "floater_required": false
     }
   ]
 }
 
-If a field is unclear, make your best guess from context. Extract ALL rows/jobs from the schedule — do not stop at one.`;
+Extract ALL rows/jobs. Do not stop at one.`;
+
+type GeminiPart =
+  | { text: string }
+  | { inline_data: { mime_type: string; data: string } };
 
 async function fileToBase64(file: File): Promise<{ mimeType: string; data: string }> {
   return new Promise((resolve, reject) => {
@@ -58,13 +73,33 @@ async function fileToBase64(file: File): Promise<{ mimeType: string; data: strin
       const [header, data] = result.split(',');
       const mimeMatch = header.match(/data:(.*?);/);
       resolve({
-        mimeType: mimeMatch?.[1] ?? file.type ?? 'image/jpeg',
+        mimeType: mimeMatch?.[1] ?? file.type ?? 'application/octet-stream',
         data,
       });
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+async function excelToText(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const wb = XLSX.read(buffer, { type: 'array' });
+  return wb.SheetNames.map((name) => {
+    const sheet = wb.Sheets[name];
+    return `=== Sheet: ${name} ===\n${XLSX.utils.sheet_to_csv(sheet)}`;
+  }).join('\n\n');
+}
+
+function isBottlingLine(lineName: string): boolean {
+  return /bottling line/i.test(lineName);
+}
+
+function detectDividerFromText(job: AiExtractedJob): boolean {
+  if (job.divider_required) return true;
+  if (!isBottlingLine(job.production_line)) return false;
+  const blob = `${job.product_name} ${job.notes ?? ''}`.toLowerCase();
+  return /\bdivider\b/.test(blob);
 }
 
 function parseAiResponse(content: string): AiScheduleResult {
@@ -77,18 +112,27 @@ function parseAiResponse(content: string): AiScheduleResult {
 
   const jobs = parsed.jobs
     .filter((j) => j.product_name?.trim())
-    .map((j) => ({
-      production_line: String(j.production_line ?? '').trim(),
-      product_name: String(j.product_name).trim(),
-      start_date: normalizeDate(String(j.start_date ?? '')),
-      start_time: normalizeTime(String(j.start_time ?? '')),
-      runtime_hours: Number(j.runtime_hours) || 0,
-      notes: j.notes ? String(j.notes) : '',
-    }))
+    .map((j) => {
+      const job: AiExtractedJob = {
+        production_line: String(j.production_line ?? '').trim(),
+        product_name: String(j.product_name).trim(),
+        start_date: normalizeDate(String(j.start_date ?? '')),
+        start_time: normalizeTime(String(j.start_time ?? '')),
+        runtime_hours: Number(j.runtime_hours) || 0,
+        notes: j.notes ? String(j.notes) : '',
+        divider_required: detectDividerFromText({
+          ...j,
+          production_line: String(j.production_line ?? ''),
+          product_name: String(j.product_name ?? ''),
+        }),
+        floater_required: Boolean(j.floater_required),
+      };
+      return job;
+    })
     .filter((j) => j.runtime_hours > 0);
 
   if (jobs.length === 0) {
-    throw new Error('No production jobs found in the image. Try a clearer photo.');
+    throw new Error('No production jobs found in the file. Try a clearer photo or file.');
   }
 
   return { jobs, raw_response: content };
@@ -132,41 +176,67 @@ export function matchLineName(
   );
 }
 
-export async function extractScheduleWithAI(
-  file: File,
-  lines: ProductionLine[],
-): Promise<AiScheduleResult> {
-  const apiKey = settingsService.get().gemini_api_key;
-  if (!apiKey) {
-    throw new Error(
-      'Free Gemini API key not configured. Go to Administration → AI Settings and add your key from Google AI Studio.',
-    );
+export function validateScheduleFile(file: File): string | null {
+  const name = file.name.toLowerCase();
+  const isImage =
+    file.type.startsWith('image/') || /\.(png|jpe?g|webp|heic|heif)$/i.test(name);
+  const isPdf = file.type === 'application/pdf' || name.endsWith('.pdf');
+  const isExcel =
+    file.type.includes('spreadsheet') ||
+    file.type.includes('excel') ||
+    /\.(xlsx|xls|csv)$/i.test(name);
+
+  if (!isImage && !isPdf && !isExcel) {
+    return 'Supported files: images (PNG, JPG), PDF, Excel (.xlsx, .xls), or CSV';
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    return 'File size must be less than 20MB';
+  }
+  return null;
+}
+
+function isExcelFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return (
+    file.type.includes('spreadsheet') ||
+    file.type.includes('excel') ||
+    /\.(xlsx|xls|csv)$/i.test(name)
+  );
+}
+
+function isPdfFile(file: File): boolean {
+  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+}
+
+async function buildGeminiParts(file: File, lineList: string): Promise<GeminiPart[]> {
+  const instruction = `${PROMPT}\n\nExtract all production jobs from this schedule. Known lines: ${lineList}`;
+
+  if (isExcelFile(file)) {
+    const spreadsheetText = await excelToText(file);
+    return [
+      {
+        text: `${instruction}\n\n--- SPREADSHEET DATA ---\n${spreadsheetText}`,
+      },
+    ];
   }
 
   const { mimeType, data } = await fileToBase64(file);
-  const lineList = lines.map((l) => l.name).join(', ');
+  const mediaType = isPdfFile(file) ? 'application/pdf' : mimeType;
 
+  return [
+    { text: instruction },
+    { inline_data: { mime_type: mediaType, data } },
+  ];
+}
+
+async function callGemini(parts: GeminiPart[], apiKey: string): Promise<string> {
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `${PROMPT}\n\nExtract all production jobs from this schedule. Known lines: ${lineList}`,
-              },
-              {
-                inline_data: {
-                  mime_type: mimeType,
-                  data,
-                },
-              },
-            ],
-          },
-        ],
+        contents: [{ parts }],
         generationConfig: {
           responseMimeType: 'application/json',
           temperature: 0.1,
@@ -185,7 +255,26 @@ export async function extractScheduleWithAI(
 
   const result = await response.json();
   const content = result.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!content) throw new Error('Empty response from AI — try a clearer photo');
+  if (!content) throw new Error('Empty response from AI — try a clearer file');
+  return content;
+}
 
+export async function extractScheduleWithAI(
+  file: File,
+  lines: ProductionLine[],
+): Promise<AiScheduleResult> {
+  const apiKey = settingsService.get().gemini_api_key;
+  if (!apiKey) {
+    throw new Error('Gemini API key not configured.');
+  }
+
+  const lineList = lines.map((l) => l.name).join(', ');
+  const parts = await buildGeminiParts(file, lineList);
+  const content = await callGemini(parts, apiKey);
   return parseAiResponse(content);
+}
+
+/** @deprecated use validateScheduleFile */
+export function validateImageFile(file: File): string | null {
+  return validateScheduleFile(file);
 }

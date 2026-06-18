@@ -70,6 +70,7 @@ function defaultTemplates(lines: ProductionLine[]): StaffingTemplate[] {
     { line: 'Bottling Line 2', position: 'Boxer', qty: 1, required: true },
     { line: 'Bottling Line 2', position: 'Depal', qty: 1, required: true },
     { line: 'Bottling Line 2', position: 'Labeller', qty: 1, required: true },
+    { line: 'Bottling Line 2', position: 'Divider', qty: 1, required: false },
     { line: 'Bottling Line 2', position: 'Floater', qty: 1, required: false },
     { line: 'Canning Line 1', position: 'Worker', qty: 4, required: true },
     { line: 'Canning Line 2', position: 'QA', qty: 1, required: true },
@@ -148,10 +149,33 @@ function initData(): StoredData {
   };
 }
 
+function migrateData(data: StoredData): StoredData {
+  const line2 = data.production_lines.find((l) => l.name === 'Bottling Line 2');
+  if (line2) {
+    const hasDivider = data.staffing_templates.some(
+      (t) => t.production_line_id === line2.id && t.position === 'Divider',
+    );
+    if (!hasDivider) {
+      const t = now();
+      data.staffing_templates.push({
+        id: uuidv4(),
+        production_line_id: line2.id,
+        position: 'Divider',
+        quantity: 1,
+        is_required: false,
+        created_at: t,
+        updated_at: t,
+      });
+      save(data);
+    }
+  }
+  return data;
+}
+
 function load(): StoredData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as StoredData;
+    if (raw) return migrateData(JSON.parse(raw) as StoredData);
   } catch {
     /* ignore */
   }

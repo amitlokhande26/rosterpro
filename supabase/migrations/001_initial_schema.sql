@@ -271,6 +271,7 @@ JOIN (VALUES
   ('Bottling Line 2', 'Boxer', 1, true),
   ('Bottling Line 2', 'Depal', 1, true),
   ('Bottling Line 2', 'Labeller', 1, true),
+  ('Bottling Line 2', 'Divider', 1, false),
   ('Bottling Line 2', 'Floater', 1, false),
   ('Canning Line 1', 'Worker', 4, true),
   ('Canning Line 2', 'QA', 1, true),

@@ -19,7 +19,7 @@ function load(): AppSettings & { openai_api_key?: string } {
 }
 
 function save(settings: AppSettings): void {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 }
 
 export const settingsService = {
