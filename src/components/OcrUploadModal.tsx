@@ -1,13 +1,13 @@
 import { useState, useRef } from 'react';
 import { X, Check, AlertCircle, Camera, FileUp, Sparkles, Trash2 } from 'lucide-react';
 import { Button, Badge } from '@/components/ui';
+import { QuantityDisplay } from '@/components/QuantityDisplay';
 import { extractScheduleWithAI, matchLineName, validateScheduleFile } from '@/services/aiScheduleService';
 import {
   resolveJobQuantities,
   isKeggingLine,
   isPackBasedLine,
   packOptionsForSelect,
-  formatQuantityDisplay,
   parseOuterPackSize,
   normalizePackLabel,
 } from '@/services/quantityService';
@@ -410,7 +410,7 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
                             )}
                           </td>
                           <td className="px-3 py-2 text-xs text-slate-600">
-                            {formatQuantityDisplay(lineName, row)}
+                            <QuantityDisplay lineName={lineName} job={row} />
                           </td>
                           <td className="px-3 py-2">
                             {isBottling ? (

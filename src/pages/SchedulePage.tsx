@@ -15,11 +15,11 @@ import {
   isKeggingLine,
   isPackBasedLine,
   packOptionsForSelect,
-  formatQuantityDisplay,
   parseOuterPackSize,
   normalizePackLabel,
 } from '@/services/quantityService';
 import { OcrUploadModal } from '@/components/OcrUploadModal';
+import { QuantityDisplay } from '@/components/QuantityDisplay';
 import type { ProductionJobInput } from '@/lib/types';
 
 function withQuantities(form: ProductionJobInput, lineName: string): ProductionJobInput {
@@ -302,10 +302,12 @@ export function SchedulePage() {
                 )}
                 <div>
                   <label className="block text-xs font-medium text-slate-600">Total Quantity</label>
-                  <p className="mt-2 text-sm font-medium text-slate-800">
-                    {selectedLineName
-                      ? formatQuantityDisplay(selectedLineName, form)
-                      : '—'}
+                  <p className="mt-2 text-sm text-slate-800">
+                    {selectedLineName ? (
+                      <QuantityDisplay lineName={selectedLineName} job={form} />
+                    ) : (
+                      '—'
+                    )}
                   </p>
                 </div>
               </div>
@@ -390,7 +392,10 @@ export function SchedulePage() {
                       </td>
                       <td className="py-3 pr-4">{job.runtime_hours}h</td>
                       <td className="py-3 pr-4 text-xs text-slate-600">
-                        {formatQuantityDisplay(lineMap.get(job.production_line_id) ?? '', job)}
+                        <QuantityDisplay
+                          lineName={lineMap.get(job.production_line_id) ?? ''}
+                          job={job}
+                        />
                       </td>
                       <td className="py-3 pr-4">
                         <div className="flex flex-wrap gap-1">
