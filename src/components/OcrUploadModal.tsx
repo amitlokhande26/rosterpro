@@ -6,9 +6,10 @@ import {
   resolveJobQuantities,
   isKeggingLine,
   isPackBasedLine,
-  PACK_SIZE_OPTIONS,
+  packOptionsForSelect,
   formatQuantityDisplay,
   parseOuterPackSize,
+  normalizePackLabel,
 } from '@/services/quantityService';
 import type { ProductionJobInput, ProductionLine } from '@/lib/types';
 import { uuidv4 } from '@/services/uuid';
@@ -381,22 +382,27 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
                           </td>
                           <td className="px-3 py-2">
                             {showPack ? (
-                              <select
-                                value={row.outer_pack_label ?? ''}
-                                onChange={(e) => {
-                                  const label = e.target.value || null;
-                                  updateRow(row.rowId, {
-                                    outer_pack_label: label,
-                                    outer_pack_size: label ? parseOuterPackSize(label) : null,
-                                  });
-                                }}
-                                className="w-20 rounded border border-slate-300 px-1 py-1 text-xs"
-                              >
-                                <option value="">—</option>
-                                {PACK_SIZE_OPTIONS.map((pk) => (
-                                  <option key={pk} value={pk}>{pk}</option>
-                                ))}
-                              </select>
+                              <>
+                                <input
+                                  type="text"
+                                  list={`pack-sizes-${row.rowId}`}
+                                  placeholder="e.g. 6PK"
+                                  value={row.outer_pack_label ?? ''}
+                                  onChange={(e) => {
+                                    const label = normalizePackLabel(e.target.value);
+                                    updateRow(row.rowId, {
+                                      outer_pack_label: label,
+                                      outer_pack_size: label ? parseOuterPackSize(label) : null,
+                                    });
+                                  }}
+                                  className="w-20 rounded border border-slate-300 px-1 py-1 text-xs uppercase"
+                                />
+                                <datalist id={`pack-sizes-${row.rowId}`}>
+                                  {packOptionsForSelect(row.outer_pack_label).map((pk) => (
+                                    <option key={pk} value={pk} />
+                                  ))}
+                                </datalist>
+                              </>
                             ) : (
                               <span className="text-xs text-slate-400">
                                 {isKeg ? 'kegs' : '—'}

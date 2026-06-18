@@ -102,4 +102,30 @@ export function formatQuantityDisplay(
   return `${total.toLocaleString()} ${unit}`;
 }
 
-export const PACK_SIZE_OPTIONS = ['6PK', '12PK', '24PK', '4PK', '1PK'] as const;
+export const PACK_SIZE_OPTIONS = ['1PK', '4PK', '6PK', '12PK', '24PK', '30PK'] as const;
+
+/** Detect pack size from text such as product name, notes, or "30PK" in schedule */
+export function detectPackFromText(text: string): { label: string; size: number } | null {
+  const match = text.match(/\b(\d+)\s*PK\b/i);
+  if (!match) return null;
+  const size = parseInt(match[1], 10);
+  if (size <= 0) return null;
+  return { label: `${size}PK`, size };
+}
+
+export function normalizePackLabel(label: string | null | undefined): string | null {
+  if (!label?.trim()) return null;
+  const trimmed = label.trim().toUpperCase();
+  const detected = detectPackFromText(trimmed);
+  return detected?.label ?? trimmed;
+}
+
+/** Common pack sizes plus any value already on the job (e.g. AI-extracted 30PK) */
+export function packOptionsForSelect(currentLabel?: string | null): string[] {
+  const options = new Set<string>(PACK_SIZE_OPTIONS);
+  const normalized = normalizePackLabel(currentLabel);
+  if (normalized) options.add(normalized);
+  return Array.from(options).sort(
+    (a, b) => parseOuterPackSize(a) - parseOuterPackSize(b),
+  );
+}

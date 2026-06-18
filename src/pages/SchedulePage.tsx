@@ -14,9 +14,10 @@ import {
   resolveJobQuantities,
   isKeggingLine,
   isPackBasedLine,
-  PACK_SIZE_OPTIONS,
+  packOptionsForSelect,
   formatQuantityDisplay,
   parseOuterPackSize,
+  normalizePackLabel,
 } from '@/services/quantityService';
 import { OcrUploadModal } from '@/components/OcrUploadModal';
 import type { ProductionJobInput } from '@/lib/types';
@@ -278,22 +279,25 @@ export function SchedulePage() {
                 {showPackFields && (
                   <div>
                     <label className="block text-xs font-medium text-slate-600">Outer Pack</label>
-                    <select
+                    <input
+                      type="text"
+                      list="schedule-pack-sizes"
+                      placeholder="e.g. 6PK, 30PK"
                       value={form.outer_pack_label ?? ''}
                       onChange={(e) => {
-                        const label = e.target.value || null;
+                        const label = normalizePackLabel(e.target.value);
                         setFormWithQuantities({
                           outer_pack_label: label,
                           outer_pack_size: label ? parseOuterPackSize(label) : null,
                         });
                       }}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    >
-                      <option value="">Select pack...</option>
-                      {PACK_SIZE_OPTIONS.map((pk) => (
-                        <option key={pk} value={pk}>{pk}</option>
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm uppercase"
+                    />
+                    <datalist id="schedule-pack-sizes">
+                      {packOptionsForSelect(form.outer_pack_label).map((pk) => (
+                        <option key={pk} value={pk} />
                       ))}
-                    </select>
+                    </datalist>
                   </div>
                 )}
                 <div>

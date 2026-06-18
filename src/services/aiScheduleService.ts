@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { settingsService } from './settingsService';
-import { parseOuterPackSize } from './quantityService';
+import { parseOuterPackSize, detectPackFromText, normalizePackLabel } from './quantityService';
 import type { ProductionLine } from '@/lib/types';
 
 export interface AiExtractedJob {
@@ -43,7 +43,7 @@ For each job extract:
 - divider_required: true if "Divider" is mentioned for this specific bottling line run (Bottling Line 1 or Bottling Line 2 only). Look for the word "Divider" in the row, product notes, or schedule comments for that run. false otherwise.
 - floater_required: true only if "Floater" is explicitly mentioned for that run on a bottling line, false otherwise
 - quantity_ordered: number of outer packs/cases ordered (or kegs for kegging — see below)
-- outer_pack_label: pack size label such as "6PK", "12PK", "24PK" for bottling and canning lines; null for kegging
+- outer_pack_label: pack size label such as "6PK", "12PK", "24PK", "30PK" for bottling and canning lines; null for kegging
 - outer_pack_size: numeric units per outer pack (e.g. 6 for 6PK); null for kegging
 
 QUANTITY rules:
@@ -116,6 +116,29 @@ function detectDividerFromText(job: AiExtractedJob): boolean {
   return /\bdivider\b/.test(blob);
 }
 
+function resolvePackFields(j: AiExtractedJob): {
+  outer_pack_label: string | null;
+  outer_pack_size: number | null;
+} {
+  let label = normalizePackLabel(
+    j.outer_pack_label ? String(j.outer_pack_label) : null,
+  );
+  let size =
+    j.outer_pack_size != null ? parseOuterPackSize(j.outer_pack_size) : null;
+
+  if (!label) {
+    const detected = detectPackFromText(`${j.product_name ?? ''} ${j.notes ?? ''}`);
+    if (detected) {
+      label = detected.label;
+      size = detected.size;
+    }
+  } else if (size == null) {
+    size = parseOuterPackSize(label);
+  }
+
+  return { outer_pack_label: label, outer_pack_size: size };
+}
+
 function parseAiResponse(content: string): AiScheduleResult {
   const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
   const parsed = JSON.parse(cleaned) as { jobs?: AiExtractedJob[] };
@@ -141,8 +164,11 @@ function parseAiResponse(content: string): AiScheduleResult {
         }),
         floater_required: Boolean(j.floater_required),
         quantity_ordered: parseQuantity(j.quantity_ordered),
-        outer_pack_label: j.outer_pack_label ? String(j.outer_pack_label).trim() : null,
-        outer_pack_size: j.outer_pack_size != null ? parseOuterPackSize(j.outer_pack_size) : null,
+        ...resolvePackFields({
+          ...j,
+          production_line: String(j.production_line ?? ''),
+          product_name: String(j.product_name ?? ''),
+        }),
       };
       return job;
     })
