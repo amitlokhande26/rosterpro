@@ -278,9 +278,43 @@ async function buildGeminiParts(file: File, lineList: string): Promise<GeminiPar
   ];
 }
 
-async function callGemini(parts: GeminiPart[], apiKey: string): Promise<string> {
+const GEMINI_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+] as const;
+
+const RETRY_DELAYS_MS = [2000, 4000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isCapacityError(message: string, status: number): boolean {
+  const lower = message.toLowerCase();
+  return (
+    status === 429 ||
+    status === 503 ||
+    lower.includes('high demand') ||
+    lower.includes('resource_exhausted') ||
+    lower.includes('overloaded') ||
+    lower.includes('try again') ||
+    lower.includes('rate limit') ||
+    lower.includes('quota')
+  );
+}
+
+function isFatalGeminiError(status: number): boolean {
+  return status === 400 || status === 401 || status === 403 || status === 404;
+}
+
+async function callGeminiModel(
+  model: string,
+  parts: GeminiPart[],
+  apiKey: string,
+): Promise<string> {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -299,7 +333,9 @@ async function callGemini(parts: GeminiPart[], apiKey: string): Promise<string> 
     const message =
       (err as { error?: { message?: string } })?.error?.message ??
       `AI request failed (${response.status})`;
-    throw new Error(message);
+    const error = new Error(message) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
 
   const result = await response.json();
@@ -308,9 +344,56 @@ async function callGemini(parts: GeminiPart[], apiKey: string): Promise<string> 
   return content;
 }
 
+async function callGeminiWithFallback(
+  parts: GeminiPart[],
+  apiKey: string,
+  onStatus?: (message: string) => void,
+): Promise<string> {
+  const errors: string[] = [];
+
+  for (const model of GEMINI_MODELS) {
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        if (attempt > 0) {
+          onStatus?.(`Busy — retrying with ${model}...`);
+          await sleep(RETRY_DELAYS_MS[attempt - 1]);
+        } else if (model !== GEMINI_MODELS[0]) {
+          onStatus?.(`Trying ${model}...`);
+        }
+
+        return await callGeminiModel(model, parts, apiKey);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown AI error';
+        const status = (err as Error & { status?: number }).status ?? 0;
+        errors.push(`${model}: ${message}`);
+
+        if (isFatalGeminiError(status)) {
+          throw new Error(message);
+        }
+
+        if (!isCapacityError(message, status)) {
+          throw new Error(message);
+        }
+
+        if (attempt < RETRY_DELAYS_MS.length) {
+          onStatus?.('AI servers busy — waiting a moment...');
+          continue;
+        }
+      }
+    }
+  }
+
+  throw new Error(
+    'Gemini is temporarily overloaded. This is not caused by your Google Pro subscription — ' +
+      'the API uses a separate quota from Google AI Studio. Wait 1–2 minutes and try again, ' +
+      'or import during off-peak hours. We already tried multiple models automatically.',
+  );
+}
+
 export async function extractScheduleWithAI(
   file: File,
   lines: ProductionLine[],
+  onStatus?: (message: string) => void,
 ): Promise<AiScheduleResult> {
   const apiKey = settingsService.get().gemini_api_key;
   if (!apiKey) {
@@ -319,7 +402,7 @@ export async function extractScheduleWithAI(
 
   const lineList = lines.map((l) => l.name).join(', ');
   const parts = await buildGeminiParts(file, lineList);
-  const content = await callGemini(parts, apiKey);
+  const content = await callGeminiWithFallback(parts, apiKey, onStatus);
   return parseAiResponse(content);
 }
 

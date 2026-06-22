@@ -75,6 +75,19 @@ export function AdminPage() {
             your local <code className="rounded bg-slate-100 px-1">.env</code> file, or you can
             save an override below.
           </p>
+          <p className="text-xs text-slate-500">
+            Note: Google Pro / Google One subscription does not affect API limits. Use a key from{' '}
+            <a
+              href="https://aistudio.google.com/apikey"
+              target="_blank"
+              rel="noreferrer"
+              className="text-wine-700 underline"
+            >
+              Google AI Studio
+            </a>
+            . If you see &quot;high demand&quot; errors, wait a minute and retry — the app
+            automatically tries alternate models.
+          </p>
           <div className="flex flex-wrap gap-2">
             <input
               type="password"

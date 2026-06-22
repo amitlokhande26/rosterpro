@@ -67,7 +67,7 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
     setFileLabel(file.name);
 
     try {
-      const result = await extractScheduleWithAI(file, lines);
+      const result = await extractScheduleWithAI(file, lines, setStatusText);
 
       const rows: ReviewRow[] = result.jobs.map((job) => {
         const matched = matchLineName(job.production_line, lines);
