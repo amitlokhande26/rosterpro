@@ -15,6 +15,7 @@ import {
   getEffectiveRuntimeHours,
   isCanningLine,
   CANNING_NIGHT_GAP_HOURS,
+  formatCanningRuntimeDisplay,
 } from '@/services/calculationEngine';
 import {
   resolveJobQuantities,
@@ -408,7 +409,7 @@ export function SchedulePage() {
               {isCanningLine(selectedLineName) && (
                 <p className="mt-1 text-xs text-slate-500">
                   Canning adds {CANNING_NIGHT_GAP_HOURS}h for night shift (no night production).
-                  Total: {getEffectiveRuntimeHours(selectedLineName, form.runtime_hours)}h
+                  Total: {formatCanningRuntimeDisplay(getEffectiveRuntimeHours(selectedLineName, form.runtime_hours))}h
                 </p>
               )}
             </div>
@@ -594,7 +595,9 @@ export function SchedulePage() {
                       <td className="py-3 pr-4">
                         {isCanningLine(lineName) ? (
                           <div>
-                            <span className="font-medium">{effectiveRuntime}h</span>
+                            <span className="font-medium">
+                              {formatCanningRuntimeDisplay(effectiveRuntime)}h
+                            </span>
                             <span className="mt-0.5 block text-xs text-slate-400">
                               {job.runtime_hours}h + {CANNING_NIGHT_GAP_HOURS}h night
                             </span>

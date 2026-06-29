@@ -71,6 +71,10 @@ export function getEffectiveRuntimeHours(
   return runtimeHours;
 }
 
+export function formatCanningRuntimeDisplay(hours: number): string {
+  return hours.toFixed(2);
+}
+
 export function isWorkday(date: Date): boolean {
   return isMonday(date) || isTuesday(date) || isWednesday(date) || isThursday(date) || isFriday(date);
 }
