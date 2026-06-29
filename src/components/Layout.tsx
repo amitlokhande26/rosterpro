@@ -4,9 +4,7 @@ import {
   LayoutDashboard,
   Calendar,
   ClipboardList,
-  Users,
   Settings,
-  FileText,
   Wine,
   RotateCcw,
 } from 'lucide-react';
@@ -18,9 +16,6 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/schedule', label: 'Production Schedule', icon: Calendar },
   { to: '/roster', label: 'Roster Board', icon: ClipboardList },
-  { to: '/assignments', label: 'Assignments', icon: Users },
-  { to: '/employees', label: 'Employees', icon: Users },
-  { to: '/reports', label: 'Reports', icon: FileText },
   { to: '/admin', label: 'Administration', icon: Settings },
 ];
 

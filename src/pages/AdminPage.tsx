@@ -1,14 +1,61 @@
-import { useState, useEffect } from 'react';
-import { Plus, Trash2, Sparkles } from 'lucide-react';
+import { useState, useEffect, type FormEvent } from 'react';
+import { Plus, Trash2, Sparkles, Lock } from 'lucide-react';
 import { Card, Button, Badge, LoadingSpinner } from '@/components/ui';
 import { useAppData } from '@/hooks/useAppData';
 import { dataService } from '@/services/dataService';
 import { formatShiftTime } from '@/services/calculationEngine';
 import { settingsService } from '@/services/settingsService';
+import { adminAuthService } from '@/services/adminAuthService';
 import { ALL_SKILLS, type SkillType } from '@/lib/types';
+
+function AdminLockScreen({ onUnlock }: { onUnlock: () => void }) {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (adminAuthService.unlock(password)) {
+      setError('');
+      onUnlock();
+    } else {
+      setError('Incorrect password');
+      setPassword('');
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-md pt-16">
+      <Card title="Administration Locked">
+        <div className="flex flex-col items-center text-center">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100">
+            <Lock className="h-7 w-7 text-slate-500" />
+          </div>
+          <p className="mb-6 text-sm text-slate-600">
+            Enter the admin password to manage shifts, lines, templates, and AI settings.
+          </p>
+          <form onSubmit={handleSubmit} className="w-full space-y-3">
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              autoFocus
+            />
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <Button type="submit" className="w-full">
+              Unlock
+            </Button>
+          </form>
+        </div>
+      </Card>
+    </div>
+  );
+}
 
 export function AdminPage() {
   const { loading, shifts, lines, templates, refresh } = useAppData();
+  const [unlocked, setUnlocked] = useState(() => adminAuthService.isUnlocked());
   const [newLineName, setNewLineName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [apiKeySaved, setApiKeySaved] = useState(false);
@@ -31,6 +78,7 @@ export function AdminPage() {
   };
 
   if (loading) return <LoadingSpinner />;
+  if (!unlocked) return <AdminLockScreen onUnlock={() => setUnlocked(true)} />;
 
   const handleAddLine = async () => {
     if (!newLineName.trim()) return;
@@ -63,9 +111,21 @@ export function AdminPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Administration</h1>
-        <p className="text-slate-500">Manage shifts, production lines, staffing templates, and AI</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Administration</h1>
+          <p className="text-slate-500">Manage shifts, production lines, staffing templates, and AI</p>
+        </div>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            adminAuthService.lock();
+            setUnlocked(false);
+          }}
+        >
+          <Lock className="h-4 w-4" />
+          Lock
+        </Button>
       </div>
 
       <Card title="AI Settings" subtitle="Key loaded from .env or saved here">
