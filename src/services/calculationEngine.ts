@@ -47,9 +47,28 @@ export function calculateEndDateTime(
   startDate: string,
   startTime: string,
   runtimeHours: number,
+  lineName?: string,
 ): Date {
   const start = combineDateAndTime(startDate, startTime);
-  return addHours(start, runtimeHours);
+  return addHours(start, getEffectiveRuntimeHours(lineName, runtimeHours));
+}
+
+export const CANNING_NIGHT_GAP_HOURS = 8;
+
+export function isCanningLine(lineName: string | undefined): boolean {
+  if (!lineName) return false;
+  return /^canning line [12]$/i.test(lineName.trim());
+}
+
+/** Canning lines skip night shift — add 8h to calendar runtime */
+export function getEffectiveRuntimeHours(
+  lineName: string | undefined,
+  runtimeHours: number,
+): number {
+  if (isCanningLine(lineName)) {
+    return runtimeHours + CANNING_NIGHT_GAP_HOURS;
+  }
+  return runtimeHours;
 }
 
 export function isWorkday(date: Date): boolean {
@@ -104,11 +123,13 @@ export function getShiftsTouchedByJob(
   startTime: string,
   runtimeHours: number,
   shifts: Shift[],
+  lineName?: string,
 ): ShiftTouch[] {
   const jobStart = combineDateAndTime(startDate, startTime);
-  const jobEnd = addHours(jobStart, runtimeHours);
+  const jobEnd = addHours(jobStart, getEffectiveRuntimeHours(lineName, runtimeHours));
   const touched: ShiftTouch[] = [];
   const seen = new Set<string>();
+  const skipNight = isCanningLine(lineName);
 
   let currentDay = new Date(jobStart);
   currentDay.setHours(0, 0, 0, 0);
@@ -119,6 +140,7 @@ export function getShiftsTouchedByJob(
     if (isWorkday(currentDay)) {
       const dateStr = format(currentDay, 'yyyy-MM-dd');
       for (const shift of shifts) {
+        if (skipNight && shift.name.toLowerCase() === 'night') continue;
         const { start: shiftStart, end: shiftEnd } = getShiftInterval(dateStr, shift);
         if (intervalsOverlap(jobStart, jobEnd, shiftStart, shiftEnd)) {
           const key = `${dateStr}|${shift.id}`;
@@ -197,7 +219,13 @@ export function aggregateStaffingRequirements(
 
     const lineJobs = jobs.filter((j) => j.production_line_id === req.production_line_id);
     const shiftJobs = lineJobs.filter((j) =>
-      getShiftsTouchedByJob(j.start_date, j.start_time, j.runtime_hours, shifts).some(
+      getShiftsTouchedByJob(
+        j.start_date,
+        j.start_time,
+        j.runtime_hours,
+        shifts,
+        lineMap.get(j.production_line_id),
+      ).some(
         (s) => s.shift_date === req.shift_date && s.shift_id === req.shift_id,
       ),
     );
@@ -506,8 +534,15 @@ export function calculateDashboardMetrics(
   weekDates: string[],
   requirements: Array<{ shift_date: string; shift_id: string }>,
 ): DashboardMetrics {
+  const lineMap = new Map(lines.map((l) => [l.id, l.name]));
   const weekJobs = jobs.filter((j) => {
-    const touches = getShiftsTouchedByJob(j.start_date, j.start_time, j.runtime_hours, shifts);
+    const touches = getShiftsTouchedByJob(
+      j.start_date,
+      j.start_time,
+      j.runtime_hours,
+      shifts,
+      lineMap.get(j.production_line_id),
+    );
     return touches.some((t) => weekDates.includes(t.shift_date));
   });
 
@@ -516,7 +551,13 @@ export function calculateDashboardMetrics(
       .filter((r) => weekDates.includes(r.shift_date))
       .map((r) => {
         const job = weekJobs.find((j) =>
-          getShiftsTouchedByJob(j.start_date, j.start_time, j.runtime_hours, shifts).some(
+          getShiftsTouchedByJob(
+            j.start_date,
+            j.start_time,
+            j.runtime_hours,
+            shifts,
+            lineMap.get(j.production_line_id),
+          ).some(
             (s) => s.shift_date === r.shift_date,
           ),
         );
@@ -533,7 +574,10 @@ export function calculateDashboardMetrics(
   const unfilled_positions = Math.max(0, required_staff - assigned_staff);
 
   return {
-    total_running_hours: weekJobs.reduce((sum, j) => sum + j.runtime_hours, 0),
+    total_running_hours: weekJobs.reduce(
+      (sum, j) => sum + getEffectiveRuntimeHours(lineMap.get(j.production_line_id), j.runtime_hours),
+      0,
+    ),
     total_jobs: weekJobs.length,
     active_lines: activeLineIds.size,
     required_staff,

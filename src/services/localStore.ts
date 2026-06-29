@@ -16,6 +16,7 @@ import type {
 import {
   calculateEndDateTime,
   getShiftsTouchedByJob,
+  isCanningLine,
 } from '@/services/calculationEngine';
 import { resolveJobQuantities } from '@/services/quantityService';
 
@@ -182,6 +183,46 @@ function migrateData(data: StoredData): StoredData {
     }
   }
   if (migrated) save(data);
+
+  let canningMigrated = false;
+  for (const job of data.production_jobs) {
+    const line = data.production_lines.find((l) => l.id === job.production_line_id);
+    if (!line || !isCanningLine(line.name)) continue;
+    const endDt = calculateEndDateTime(
+      job.start_date,
+      job.start_time.substring(0, 5),
+      job.runtime_hours,
+      line.name,
+    );
+    if (job.end_datetime !== endDt.toISOString()) {
+      job.end_datetime = endDt.toISOString();
+      canningMigrated = true;
+    }
+  }
+  if (canningMigrated) {
+    data.job_shift_requirements = [];
+    for (const job of data.production_jobs) {
+      const line = data.production_lines.find((l) => l.id === job.production_line_id);
+      const touches = getShiftsTouchedByJob(
+        job.start_date,
+        job.start_time.substring(0, 5),
+        job.runtime_hours,
+        data.shifts,
+        line?.name,
+      );
+      for (const touch of touches) {
+        data.job_shift_requirements.push({
+          id: uuidv4(),
+          production_job_id: job.id,
+          shift_date: touch.shift_date,
+          shift_id: touch.shift_id,
+          production_line_id: job.production_line_id,
+          created_at: now(),
+        });
+      }
+    }
+    save(data);
+  }
 
   return data;
 }
@@ -354,9 +395,15 @@ export class LocalDataStore {
 
   createJob(input: ProductionJobInput): ProductionJob {
     const t = now();
-    const endDt = calculateEndDateTime(input.start_date, input.start_time, input.runtime_hours);
     const line = this.data.production_lines.find((l) => l.id === input.production_line_id);
-    const quantities = resolveJobQuantities(line?.name ?? '', input);
+    const lineName = line?.name;
+    const endDt = calculateEndDateTime(
+      input.start_date,
+      input.start_time,
+      input.runtime_hours,
+      lineName,
+    );
+    const quantities = resolveJobQuantities(lineName ?? '', input);
     const job: ProductionJob = {
       id: uuidv4(),
       production_line_id: input.production_line_id,
@@ -388,15 +435,16 @@ export class LocalDataStore {
     if (idx === -1) throw new Error('Job not found');
     const existing = this.data.production_jobs[idx];
     const merged = { ...existing, ...input };
-    if (input.start_date || input.start_time || input.runtime_hours) {
+    const line = this.data.production_lines.find((l) => l.id === merged.production_line_id);
+    if (input.start_date || input.start_time || input.runtime_hours || input.production_line_id) {
       const endDt = calculateEndDateTime(
         merged.start_date,
         merged.start_time.substring(0, 5),
         merged.runtime_hours,
+        line?.name,
       );
       merged.end_datetime = endDt.toISOString();
     }
-    const line = this.data.production_lines.find((l) => l.id === merged.production_line_id);
     const quantities = resolveJobQuantities(line?.name ?? '', merged);
     merged.quantity_ordered = quantities.quantity_ordered;
     merged.outer_pack_size = quantities.outer_pack_size;
@@ -421,11 +469,13 @@ export class LocalDataStore {
   }
 
   private recomputeJobRequirements(job: ProductionJob): void {
+    const line = this.data.production_lines.find((l) => l.id === job.production_line_id);
     const touches = getShiftsTouchedByJob(
       job.start_date,
       job.start_time.substring(0, 5),
       job.runtime_hours,
       this.data.shifts,
+      line?.name,
     );
     for (const touch of touches) {
       this.data.job_shift_requirements.push({

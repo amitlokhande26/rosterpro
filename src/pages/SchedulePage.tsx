@@ -11,6 +11,9 @@ import {
   formatShiftTime,
   getShiftsTouchedByJob,
   getWeekStart,
+  getEffectiveRuntimeHours,
+  isCanningLine,
+  CANNING_NIGHT_GAP_HOURS,
 } from '@/services/calculationEngine';
 import {
   resolveJobQuantities,
@@ -330,6 +333,12 @@ export function SchedulePage() {
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                 required
               />
+              {isCanningLine(selectedLineName) && (
+                <p className="mt-1 text-xs text-slate-500">
+                  Canning adds {CANNING_NIGHT_GAP_HOURS}h for night shift (no night production).
+                  Total: {getEffectiveRuntimeHours(selectedLineName, form.runtime_hours)}h
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700">Calculated End</label>
@@ -337,7 +346,12 @@ export function SchedulePage() {
                 <Clock className="h-4 w-4" />
                 {form.start_date && form.start_time && form.runtime_hours
                   ? format(
-                      calculateEndDateTime(form.start_date, form.start_time, form.runtime_hours),
+                      calculateEndDateTime(
+                        form.start_date,
+                        form.start_time,
+                        form.runtime_hours,
+                        selectedLineName,
+                      ),
                       'EEE dd MMM yyyy, h:mm a',
                     )
                   : '—'}
@@ -485,12 +499,15 @@ export function SchedulePage() {
               </thead>
               <tbody>
                 {sortedJobs.map((job) => {
+                  const lineName = lineMap.get(job.production_line_id) ?? '';
                   const touches = getShiftsTouchedByJob(
                     job.start_date,
                     job.start_time.substring(0, 5),
                     job.runtime_hours,
                     shifts,
+                    lineName,
                   );
+                  const effectiveRuntime = getEffectiveRuntimeHours(lineName, job.runtime_hours);
                   return (
                     <tr key={job.id} className="border-b border-slate-100">
                       <td className="py-3 pr-4 font-medium">{lineMap.get(job.production_line_id)}</td>
@@ -502,10 +519,21 @@ export function SchedulePage() {
                       <td className="py-3 pr-4">
                         {format(parseISO(job.end_datetime), 'EEE dd MMM, h:mm a')}
                       </td>
-                      <td className="py-3 pr-4">{job.runtime_hours}h</td>
+                      <td className="py-3 pr-4">
+                        {isCanningLine(lineName) ? (
+                          <div>
+                            <span className="font-medium">{effectiveRuntime}h</span>
+                            <span className="mt-0.5 block text-xs text-slate-400">
+                              {job.runtime_hours}h + {CANNING_NIGHT_GAP_HOURS}h night
+                            </span>
+                          </div>
+                        ) : (
+                          `${job.runtime_hours}h`
+                        )}
+                      </td>
                       <td className="py-3 pr-4 text-xs text-slate-600">
                         <QuantityDisplay
-                          lineName={lineMap.get(job.production_line_id) ?? ''}
+                          lineName={lineName}
                           job={job}
                         />
                       </td>
