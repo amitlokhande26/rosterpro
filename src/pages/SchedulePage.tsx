@@ -1,14 +1,16 @@
-import { useState, useMemo } from 'react';
-import { format, parseISO } from 'date-fns';
-import { Plus, Trash2, Edit2, Clock, Sparkles } from 'lucide-react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { format, parseISO, addWeeks, subWeeks, addDays } from 'date-fns';
+import { Plus, Trash2, Edit2, Clock, Sparkles, ChevronLeft, ChevronRight, Filter } from 'lucide-react';
 import { Card, Button, Badge, LoadingSpinner } from '@/components/ui';
 import { useAppData } from '@/hooks/useAppData';
+import { cn } from '@/lib/utils';
 import { dataService } from '@/services/dataService';
 import {
   calculateEndDateTime,
   validateJobInput,
   formatShiftTime,
   getShiftsTouchedByJob,
+  getWeekStart,
 } from '@/services/calculationEngine';
 import {
   resolveJobQuantities,
@@ -46,6 +48,54 @@ export function SchedulePage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
+  const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (lines.length > 0 && selectedLineIds.size === 0) {
+      setSelectedLineIds(new Set(lines.map((l) => l.id)));
+    }
+  }, [lines, selectedLineIds.size]);
+
+  const toggleLine = useCallback((lineId: string) => {
+    setSelectedLineIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(lineId)) {
+        if (next.size <= 1) return prev;
+        next.delete(lineId);
+      } else {
+        next.add(lineId);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAllLines = () => setSelectedLineIds(new Set(lines.map((l) => l.id)));
+  const isAllSelected = lines.length > 0 && selectedLineIds.size === lines.length;
+
+  const jobsInWeek = useMemo(() => {
+    const weekEndStr = format(addDays(weekStart, 4), 'yyyy-MM-dd');
+    const weekStartStr = format(weekStart, 'yyyy-MM-dd');
+
+    return jobs.filter((job) => {
+      const jobEndStr = format(parseISO(job.end_datetime), 'yyyy-MM-dd');
+      return job.start_date <= weekEndStr && jobEndStr >= weekStartStr;
+    });
+  }, [jobs, weekStart]);
+
+  const filteredJobs = useMemo(() => {
+    return jobsInWeek.filter((job) => selectedLineIds.has(job.production_line_id));
+  }, [jobsInWeek, selectedLineIds]);
+
+  const sortedJobs = useMemo(
+    () =>
+      [...filteredJobs].sort((a, b) => {
+        const aDate = new Date(`${a.start_date}T${a.start_time}`).getTime();
+        const bDate = new Date(`${b.start_date}T${b.start_time}`).getTime();
+        return aDate - bDate;
+      }),
+    [filteredJobs],
+  );
 
   const lineMap = useMemo(() => new Map(lines.map((l) => [l.id, l.name])), [lines]);
   const selectedLineName = lineMap.get(form.production_line_id) ?? '';
@@ -57,16 +107,6 @@ export function SchedulePage() {
     const lineName = lineMap.get(lineId) ?? '';
     setForm((prev) => withQuantities({ ...prev, ...updates }, lineName));
   };
-
-  const sortedJobs = useMemo(
-    () =>
-      [...jobs].sort((a, b) => {
-        const aDate = new Date(`${a.start_date}T${a.start_time}`).getTime();
-        const bDate = new Date(`${b.start_date}T${b.start_time}`).getTime();
-        return aDate - bDate;
-      }),
-    [jobs],
-  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,18 +183,81 @@ export function SchedulePage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Production Schedule</h1>
           <p className="text-slate-500">Manage production jobs and staffing requirements</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setShowOcr(true)}>
+              <Sparkles className="h-4 w-4" />
+              Import Schedule (AI)
+            </Button>
+            <Button onClick={() => { setShowForm(true); setEditId(null); setForm(emptyForm); }}>
+              <Plus className="h-4 w-4" />
+              Manual Entry
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => setShowOcr(true)}>
-            <Sparkles className="h-4 w-4" />
-            Import Schedule (AI)
-          </Button>
-          <Button onClick={() => { setShowForm(true); setEditId(null); setForm(emptyForm); }}>
-            <Plus className="h-4 w-4" />
-            Manual Entry
-          </Button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setWeekStart(subWeeks(weekStart, 1))}
+            className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="min-w-[180px] text-center text-sm font-medium">
+            {format(weekStart, 'dd MMM')} — {format(addWeeks(weekStart, 1), 'dd MMM yyyy')}
+          </span>
+          <button
+            type="button"
+            onClick={() => setWeekStart(addWeeks(weekStart, 1))}
+            className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
         </div>
       </div>
+
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+            <Filter className="h-4 w-4 text-slate-400" />
+            Production Lines
+          </div>
+          <button
+            type="button"
+            onClick={selectAllLines}
+            className={cn(
+              'rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
+              isAllSelected
+                ? 'bg-wine-600 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+            )}
+          >
+            All Lines
+          </button>
+          {lines.map((line) => {
+            const isActive = selectedLineIds.has(line.id);
+            return (
+              <button
+                key={line.id}
+                type="button"
+                onClick={() => toggleLine(line.id)}
+                className={cn(
+                  'rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
+                  isActive
+                    ? 'bg-wine-100 text-wine-800 ring-1 ring-wine-300'
+                    : 'bg-slate-100 text-slate-400 line-through hover:bg-slate-200',
+                )}
+              >
+                {line.name}
+              </button>
+            );
+          })}
+        </div>
+        {!isAllSelected && selectedLineIds.size > 0 && (
+          <p className="mt-2 text-xs text-slate-500">
+            Showing schedule for {selectedLineIds.size} of {lines.length} lines
+          </p>
+        )}
+      </Card>
 
       {showOcr && (
         <OcrUploadModal
@@ -352,9 +455,18 @@ export function SchedulePage() {
         </Card>
       )}
 
-      <Card title="Scheduled Jobs" subtitle={`${sortedJobs.length} production jobs`}>
+      <Card
+        title="Scheduled Jobs"
+        subtitle={
+          sortedJobs.length === jobsInWeek.length && isAllSelected
+            ? `${sortedJobs.length} production jobs this week`
+            : `Showing ${sortedJobs.length} of ${jobsInWeek.length} jobs this week`
+        }
+      >
         {sortedJobs.length === 0 ? (
-          <p className="text-sm text-slate-500">No production jobs scheduled. Add a job to get started.</p>
+          <p className="text-sm text-slate-500">
+            No production jobs for this week and line selection. Try another week or select more lines.
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
