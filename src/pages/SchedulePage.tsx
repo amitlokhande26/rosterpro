@@ -11,6 +11,7 @@ import {
   formatShiftTime,
   getShiftsTouchedByJob,
   getWeekStart,
+  getWeekDates,
   getEffectiveRuntimeHours,
   isCanningLine,
   CANNING_NIGHT_GAP_HOURS,
@@ -43,6 +44,13 @@ const emptyForm: ProductionJobInput = {
   optional_resource_reason: '',
 };
 
+const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as const;
+
+function jobOverlapsDay(job: { start_date: string; end_datetime: string }, dayStr: string): boolean {
+  const jobEndStr = format(parseISO(job.end_datetime), 'yyyy-MM-dd');
+  return job.start_date <= dayStr && jobEndStr >= dayStr;
+}
+
 export function SchedulePage() {
   const { loading, lines, jobs, shifts, refresh } = useAppData();
   const [showForm, setShowForm] = useState(false);
@@ -53,12 +61,19 @@ export function SchedulePage() {
   const [saving, setSaving] = useState(false);
   const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
   const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+  const [selectedDayDates, setSelectedDayDates] = useState<Set<string>>(new Set());
+
+  const weekDates = useMemo(() => getWeekDates(weekStart), [weekStart]);
 
   useEffect(() => {
     if (lines.length > 0 && selectedLineIds.size === 0) {
       setSelectedLineIds(new Set(lines.map((l) => l.id)));
     }
   }, [lines, selectedLineIds.size]);
+
+  useEffect(() => {
+    setSelectedDayDates(new Set(getWeekDates(weekStart)));
+  }, [weekStart]);
 
   const toggleLine = useCallback((lineId: string) => {
     setSelectedLineIds((prev) => {
@@ -76,6 +91,22 @@ export function SchedulePage() {
   const selectAllLines = () => setSelectedLineIds(new Set(lines.map((l) => l.id)));
   const isAllSelected = lines.length > 0 && selectedLineIds.size === lines.length;
 
+  const toggleDay = useCallback((day: string) => {
+    setSelectedDayDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(day)) {
+        if (next.size <= 1) return prev;
+        next.delete(day);
+      } else {
+        next.add(day);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAllDays = () => setSelectedDayDates(new Set(weekDates));
+  const isAllDaysSelected = weekDates.length > 0 && selectedDayDates.size === weekDates.length;
+
   const jobsInWeek = useMemo(() => {
     const weekEndStr = format(addDays(weekStart, 4), 'yyyy-MM-dd');
     const weekStartStr = format(weekStart, 'yyyy-MM-dd');
@@ -87,8 +118,14 @@ export function SchedulePage() {
   }, [jobs, weekStart]);
 
   const filteredJobs = useMemo(() => {
-    return jobsInWeek.filter((job) => selectedLineIds.has(job.production_line_id));
-  }, [jobsInWeek, selectedLineIds]);
+    return jobsInWeek.filter((job) => {
+      if (!selectedLineIds.has(job.production_line_id)) return false;
+      if (isAllDaysSelected) return true;
+      return weekDates.some(
+        (day) => selectedDayDates.has(day) && jobOverlapsDay(job, day),
+      );
+    });
+  }, [jobsInWeek, selectedLineIds, selectedDayDates, weekDates, isAllDaysSelected]);
 
   const sortedJobs = useMemo(
     () =>
@@ -197,24 +234,59 @@ export function SchedulePage() {
             </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setWeekStart(subWeeks(weekStart, 1))}
-            className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <span className="min-w-[180px] text-center text-sm font-medium">
-            {format(weekStart, 'dd MMM')} — {format(addWeeks(weekStart, 1), 'dd MMM yyyy')}
-          </span>
-          <button
-            type="button"
-            onClick={() => setWeekStart(addWeeks(weekStart, 1))}
-            className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setWeekStart(subWeeks(weekStart, 1))}
+              className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="min-w-[180px] text-center text-sm font-medium">
+              {format(weekStart, 'dd MMM')} — {format(addWeeks(weekStart, 1), 'dd MMM yyyy')}
+            </span>
+            <button
+              type="button"
+              onClick={() => setWeekStart(addWeeks(weekStart, 1))}
+              className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={selectAllDays}
+              className={cn(
+                'rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                isAllDaysSelected
+                  ? 'bg-wine-600 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+              )}
+            >
+              All
+            </button>
+            {weekDates.map((day, i) => {
+              const isActive = selectedDayDates.has(day);
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => toggleDay(day)}
+                  title={format(parseISO(day), 'EEE dd MMM')}
+                  className={cn(
+                    'min-w-[40px] rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                    isActive
+                      ? 'bg-wine-100 text-wine-800 ring-1 ring-wine-300'
+                      : 'bg-slate-100 text-slate-400 line-through hover:bg-slate-200',
+                  )}
+                >
+                  {WEEKDAY_LABELS[i]}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -472,14 +544,14 @@ export function SchedulePage() {
       <Card
         title="Scheduled Jobs"
         subtitle={
-          sortedJobs.length === jobsInWeek.length && isAllSelected
+          sortedJobs.length === jobsInWeek.length && isAllSelected && isAllDaysSelected
             ? `${sortedJobs.length} production jobs this week`
             : `Showing ${sortedJobs.length} of ${jobsInWeek.length} jobs this week`
         }
       >
         {sortedJobs.length === 0 ? (
           <p className="text-sm text-slate-500">
-            No production jobs for this week and line selection. Try another week or select more lines.
+            No production jobs for this week, day, and line selection. Try another week, day, or line.
           </p>
         ) : (
           <div className="overflow-x-auto">
