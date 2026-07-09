@@ -61,6 +61,11 @@ export function isCanningLine(lineName: string | undefined): boolean {
   return /^canning line [12]$/i.test(lineName.trim());
 }
 
+export function isBottlingLine(lineName: string | undefined): boolean {
+  if (!lineName) return false;
+  return /^bottling line [12]$/i.test(lineName.trim());
+}
+
 /** Canning lines skip night shift — add 8h to calendar runtime */
 export function getEffectiveRuntimeHours(
   lineName: string | undefined,
@@ -267,7 +272,7 @@ function getLinePositionsForShift(
   return expandLinePositions(lineId, lineName, staffing);
 }
 
-/** Peak concurrent headcount — sequential line handoffs count one crew, overlaps sum crews. */
+/** Peak concurrent headcount for bottling lines; other lines always count full crew per line. */
 function computePeakConcurrentPositions(
   shiftDate: string,
   shiftId: string,
@@ -280,10 +285,30 @@ function computePeakConcurrentPositions(
   const shift = shifts.find((s) => s.id === shiftId);
   if (!shift || lineIds.length === 0) return [];
 
+  const bottlingIds = lineIds.filter((id) => isBottlingLine(lineMap.get(id)));
+  const otherIds = lineIds.filter((id) => !isBottlingLine(lineMap.get(id)));
+
+  const otherPositions: PositionRequirement[] = [];
+  for (const lineId of otherIds) {
+    otherPositions.push(
+      ...getLinePositionsForShift(
+        lineId,
+        shiftDate,
+        shiftId,
+        jobs,
+        templates,
+        shifts,
+        lineMap,
+      ),
+    );
+  }
+
+  if (bottlingIds.length === 0) return otherPositions;
+
   type TimelineEvent = { time: number; type: 'start' | 'end'; lineId: string };
   const events: TimelineEvent[] = [];
 
-  for (const lineId of lineIds) {
+  for (const lineId of bottlingIds) {
     const shiftJobs = getShiftJobsForLine(jobs, lineId, shiftDate, shiftId, shifts, lineMap);
     for (const job of shiftJobs) {
       const interval = getJobActiveIntervalOnShift(job, shiftDate, shift);
@@ -293,9 +318,10 @@ function computePeakConcurrentPositions(
     }
   }
 
+  let bottlingPeak: PositionRequirement[] = [];
+
   if (events.length === 0) {
-    let peak: PositionRequirement[] = [];
-    for (const lineId of lineIds) {
+    for (const lineId of bottlingIds) {
       const positions = getLinePositionsForShift(
         lineId,
         shiftDate,
@@ -305,9 +331,9 @@ function computePeakConcurrentPositions(
         shifts,
         lineMap,
       );
-      if (positions.length > peak.length) peak = positions;
+      if (positions.length > bottlingPeak.length) bottlingPeak = positions;
     }
-    return peak;
+    return [...bottlingPeak, ...otherPositions];
   }
 
   events.sort((a, b) => {
@@ -319,7 +345,6 @@ function computePeakConcurrentPositions(
 
   const lineRefCount = new Map<string, number>();
   const activeLines = new Set<string>();
-  let peakPositions: PositionRequirement[] = [];
 
   for (const event of events) {
     const count = lineRefCount.get(event.lineId) ?? 0;
@@ -350,12 +375,12 @@ function computePeakConcurrentPositions(
         ),
       );
     }
-    if (current.length > peakPositions.length) {
-      peakPositions = current;
+    if (current.length > bottlingPeak.length) {
+      bottlingPeak = current;
     }
   }
 
-  return peakPositions;
+  return [...bottlingPeak, ...otherPositions];
 }
 
 function abbreviateLineName(name: string): string {
@@ -402,7 +427,7 @@ function getLineSpanOnShift(
   };
 }
 
-/** Sequential line runs on the same shift — crew moves from one line to the next. */
+/** Sequential bottling line runs on the same shift — crew moves from one line to the next. */
 export function detectCrewHandoffs(
   shiftDate: string,
   shiftId: string,
@@ -411,7 +436,10 @@ export function detectCrewHandoffs(
   shifts: Shift[],
   lineMap: Map<string, string>,
 ): CrewHandoff[] {
-  const spans = lineIds
+  const bottlingIds = lineIds.filter((id) => isBottlingLine(lineMap.get(id)));
+  if (bottlingIds.length < 2) return [];
+
+  const spans = bottlingIds
     .map((id) => getLineSpanOnShift(id, shiftDate, shiftId, jobs, shifts, lineMap))
     .filter((s): s is NonNullable<typeof s> => s !== null)
     .sort((a, b) => a.start.getTime() - b.start.getTime());
