@@ -169,12 +169,19 @@ export interface LineRunDetail {
   optional_roles: string[];
 }
 
+export interface CrewHandoff {
+  from_line: string;
+  to_line: string;
+  at: string;
+}
+
 export interface ShiftStaffingSummary {
   shift_date: string;
   shift_id: string;
   shift_name: string;
   running_lines: string[];
   running_line_details: LineRunDetail[];
+  crew_handoffs: CrewHandoff[];
   required_staff: Record<SkillType, number>;
   total_required: number;
   assigned: number;
@@ -240,6 +247,7 @@ export interface RosterCell {
   status: RosterCellStatus;
   running_lines: string[];
   running_line_details: LineRunDetail[];
+  crew_handoffs: CrewHandoff[];
   staffing: ShiftStaffingSummary | null;
   assignments: Array<{
     line_name: string;

@@ -200,6 +200,15 @@ export function RosterPage() {
                                 </li>
                               ))}
                             </ul>
+                            {cell.crew_handoffs.length > 0 && (
+                              <div className="mt-2 space-y-0.5 border-t border-current/20 pt-2">
+                                {cell.crew_handoffs.map((h, i) => (
+                                  <p key={i} className="text-xs font-medium text-wine-900/90">
+                                    {h.from_line} crew to {h.to_line} at {h.at}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
                             {cell.assignments.length > 0 && (
                               <div className="mt-2 space-y-0.5 border-t border-current/20 pt-2">
                                 {cell.assignments.slice(0, 4).map((a, i) => (

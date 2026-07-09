@@ -15,6 +15,7 @@ import {
 import type {
   ChangeoverEvent,
   ContinuousRun,
+  CrewHandoff,
   DashboardMetrics,
   IdleShift,
   PositionRequirement,
@@ -357,6 +358,106 @@ function computePeakConcurrentPositions(
   return peakPositions;
 }
 
+function abbreviateLineName(name: string): string {
+  const bottling = name.match(/^Bottling Line (\d+)$/i);
+  if (bottling) return `BL${bottling[1]}`;
+  const canning = name.match(/^Canning Line (\d+)$/i);
+  if (canning) return `CL${canning[1]}`;
+  if (/^kegging line$/i.test(name.trim())) return 'KL';
+  return name;
+}
+
+function formatHandoffTime(date: Date): string {
+  return format(date, 'h a').toLowerCase();
+}
+
+function getLineSpanOnShift(
+  lineId: string,
+  shiftDate: string,
+  shiftId: string,
+  jobs: ProductionJob[],
+  shifts: Shift[],
+  lineMap: Map<string, string>,
+): { lineId: string; lineName: string; start: Date; end: Date } | null {
+  const shift = shifts.find((s) => s.id === shiftId);
+  if (!shift) return null;
+
+  const shiftJobs = getShiftJobsForLine(jobs, lineId, shiftDate, shiftId, shifts, lineMap);
+  let start: Date | null = null;
+  let end: Date | null = null;
+
+  for (const job of shiftJobs) {
+    const interval = getJobActiveIntervalOnShift(job, shiftDate, shift);
+    if (!interval) continue;
+    if (!start || interval.start < start) start = interval.start;
+    if (!end || interval.end > end) end = interval.end;
+  }
+
+  if (!start || !end) return null;
+  return {
+    lineId,
+    lineName: lineMap.get(lineId) ?? 'Unknown',
+    start,
+    end,
+  };
+}
+
+/** Sequential line runs on the same shift — crew moves from one line to the next. */
+export function detectCrewHandoffs(
+  shiftDate: string,
+  shiftId: string,
+  lineIds: string[],
+  jobs: ProductionJob[],
+  shifts: Shift[],
+  lineMap: Map<string, string>,
+): CrewHandoff[] {
+  const spans = lineIds
+    .map((id) => getLineSpanOnShift(id, shiftDate, shiftId, jobs, shifts, lineMap))
+    .filter((s): s is NonNullable<typeof s> => s !== null)
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+
+  if (spans.length < 2) return [];
+
+  const handoffs: CrewHandoff[] = [];
+
+  for (let i = 0; i < spans.length; i++) {
+    const from = spans[i];
+    let next: (typeof spans)[number] | null = null;
+
+    for (let j = 0; j < spans.length; j++) {
+      if (i === j) continue;
+      const candidate = spans[j];
+      if (intervalsOverlap(from.start, from.end, candidate.start, candidate.end)) continue;
+      if (candidate.start < from.end) continue;
+      if (!next || candidate.start < next.start) next = candidate;
+    }
+
+    if (!next) continue;
+
+    handoffs.push({
+      from_line: abbreviateLineName(from.lineName),
+      to_line: abbreviateLineName(next.lineName),
+      at: formatHandoffTime(next.start),
+    });
+  }
+
+  const unique = new Map<string, CrewHandoff>();
+  for (const h of handoffs) {
+    unique.set(`${h.from_line}|${h.to_line}|${h.at}`, h);
+  }
+
+  return [...unique.values()].sort((a, b) => {
+    const parse = (t: string) => {
+      const [hour, ampm] = t.split(' ');
+      let h = parseInt(hour, 10);
+      if (ampm === 'pm' && h !== 12) h += 12;
+      if (ampm === 'am' && h === 12) h = 0;
+      return h;
+    };
+    return parse(a.at) - parse(b.at);
+  });
+}
+
 export function aggregateStaffingRequirements(
   jobs: ProductionJob[],
   requirements: Array<{ shift_date: string; shift_id: string; production_line_id: string }>,
@@ -424,6 +525,14 @@ export function aggregateStaffingRequirements(
       required_staff[p.position] += p.quantity;
     }
     const total_required = positions.length;
+    const crew_handoffs = detectCrewHandoffs(
+      group.shift_date,
+      group.shift_id,
+      [...group.lines],
+      jobs,
+      shifts,
+      lineMap,
+    );
 
     summaries.push({
       shift_date: group.shift_date,
@@ -434,6 +543,7 @@ export function aggregateStaffingRequirements(
         line_name: lineMap.get(id) ?? 'Unknown',
         optional_roles: [...(group.line_optional_roles.get(id) ?? [])],
       })),
+      crew_handoffs,
       required_staff,
       total_required,
       assigned: 0,
@@ -684,6 +794,7 @@ export function buildRosterBoard(
         status,
         running_lines: summary?.running_lines ?? [],
         running_line_details: summary?.running_line_details ?? [],
+        crew_handoffs: summary?.crew_handoffs ?? [],
         staffing: summary ?? null,
         assignments: shiftAssignments,
       };
