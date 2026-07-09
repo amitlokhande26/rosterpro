@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { settingsService } from './settingsService';
 import { parseOuterPackSize, detectPackFromText, normalizePackLabel } from './quantityService';
+import { detectFloaterRequired } from './closureService';
 import type { ProductionLine } from '@/lib/types';
 
 export interface AiExtractedJob {
@@ -12,6 +13,9 @@ export interface AiExtractedJob {
   notes?: string;
   divider_required?: boolean;
   floater_required?: boolean;
+  closure?: string | null;
+  closure_middle?: string | null;
+  closure_final?: string | null;
   quantity_ordered?: number | null;
   outer_pack_label?: string | null;
   outer_pack_size?: number | null;
@@ -41,7 +45,10 @@ For each job extract:
 - runtime_hours: decimal number of hours
 - notes: any extra info, or empty string
 - divider_required: true if "Divider" is mentioned for this specific bottling line run (Bottling Line 1 or Bottling Line 2 only). Look for the word "Divider" in the row, product notes, or schedule comments for that run. false otherwise.
-- floater_required: true only if "Floater" is explicitly mentioned for that run on a bottling line, false otherwise
+- closure: value from "Closure" column for bottling runs (e.g. CORKSPKAGGLPM for corks). Empty string if not applicable.
+- closure_middle: value from "Closure Middle" column (e.g. MUSPLAINSILVER for muslets). Empty string if not applicable.
+- closure_final: value from "Closure Final" column (e.g. HOODGOLDUV for hoods). Empty string if not applicable.
+- floater_required: for Bottling Line 1 and Bottling Line 2 ONLY — set true when ALL THREE closure types are present for that run: a cork code (starts with CORK), a muslet code (starts with MUS), and a hood code (starts with HOOD). These may appear in Closure / Closure Middle / Closure Final columns. If any one is missing, set false.
 - quantity_ordered: number of outer packs/cases ordered (or kegs for kegging — see below)
 - outer_pack_label: pack size label such as "6PK", "12PK", "24PK", "30PK" for bottling and canning lines; null for kegging
 - outer_pack_size: numeric units per outer pack (e.g. 6 for 6PK); null for kegging
@@ -54,6 +61,14 @@ IMPORTANT — Divider detection for bottling lines:
 - On Bottling Line 1 and Bottling Line 2 schedules, if the word "Divider" appears anywhere associated with a production run, set divider_required to true for that job.
 - This means an extra Divider staff member is needed for that shift.
 
+IMPORTANT — Floater detection for bottling lines (closure columns):
+- Schedules often have columns: Closure, Closure Middle, Closure Final.
+- Cork codes start with CORK (example: CORKSPKAGGLPM).
+- Muslet codes start with MUS (example: MUSPLAINSILVER).
+- Hood codes start with HOOD (example: HOODGOLDUV).
+- Codes change per run but the prefixes identify the closure type.
+- floater_required is true ONLY when all three types are present for that bottling run. Otherwise false.
+
 Return ONLY valid JSON:
 {
   "jobs": [
@@ -65,7 +80,10 @@ Return ONLY valid JSON:
       "runtime_hours": 8,
       "notes": "",
       "divider_required": true,
-      "floater_required": false,
+      "floater_required": true,
+      "closure": "CORKSPKAGGLPM",
+      "closure_middle": "MUSPLAINSILVER",
+      "closure_final": "HOODGOLDUV",
       "quantity_ordered": 500,
       "outer_pack_label": "6PK",
       "outer_pack_size": 6
@@ -139,6 +157,25 @@ function resolvePackFields(j: AiExtractedJob): {
   return { outer_pack_label: label, outer_pack_size: size };
 }
 
+function detectFloaterFromClosures(
+  productionLine: string,
+  input: {
+    product_name: string;
+    notes?: string;
+    closure?: string | null;
+    closure_middle?: string | null;
+    closure_final?: string | null;
+  },
+): boolean {
+  return detectFloaterRequired(productionLine, {
+    product_name: input.product_name,
+    notes: input.notes,
+    closure: input.closure,
+    closure_middle: input.closure_middle,
+    closure_final: input.closure_final,
+  });
+}
+
 function parseAiResponse(content: string): AiScheduleResult {
   const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
   const parsed = JSON.parse(cleaned) as { jobs?: AiExtractedJob[] };
@@ -162,7 +199,16 @@ function parseAiResponse(content: string): AiScheduleResult {
           production_line: String(j.production_line ?? ''),
           product_name: String(j.product_name ?? ''),
         }),
-        floater_required: Boolean(j.floater_required),
+        floater_required: detectFloaterFromClosures(
+          String(j.production_line ?? ''),
+          {
+            product_name: String(j.product_name ?? ''),
+            notes: j.notes ? String(j.notes) : '',
+            closure: j.closure ? String(j.closure).trim() : null,
+            closure_middle: j.closure_middle ? String(j.closure_middle).trim() : null,
+            closure_final: j.closure_final ? String(j.closure_final).trim() : null,
+          },
+        ),
         quantity_ordered: parseQuantity(j.quantity_ordered),
         ...resolvePackFields({
           ...j,

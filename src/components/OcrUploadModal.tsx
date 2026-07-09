@@ -3,6 +3,7 @@ import { X, Check, AlertCircle, Camera, FileUp, Sparkles, Trash2 } from 'lucide-
 import { Button, Badge } from '@/components/ui';
 import { QuantityDisplay } from '@/components/QuantityDisplay';
 import { extractScheduleWithAI, matchLineName, validateScheduleFile } from '@/services/aiScheduleService';
+import { detectFloaterRequired } from '@/services/closureService';
 import {
   resolveJobQuantities,
   isKeggingLine,
@@ -76,6 +77,13 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
           job.divider_required ??
           (/bottling line/i.test(lineName) &&
             /\bdivider\b/i.test(`${job.product_name} ${job.notes ?? ''}`));
+        const floaterRequired = detectFloaterRequired(lineName, {
+          product_name: job.product_name,
+          notes: job.notes,
+          closure: job.closure,
+          closure_middle: job.closure_middle,
+          closure_final: job.closure_final,
+        });
 
         return applyQuantityToRow(
           {
@@ -88,7 +96,7 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
             runtime_hours: job.runtime_hours,
             notes: job.notes ?? '',
             divider_required: dividerRequired,
-            floater_required: job.floater_required ?? false,
+            floater_required: floaterRequired,
             quantity_ordered: job.quantity_ordered ?? null,
             outer_pack_label: job.outer_pack_label ?? null,
             outer_pack_size: job.outer_pack_size ?? null,
@@ -265,6 +273,7 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
                   </p>
                   <p className="mt-1">
                     Divider is auto-detected for bottling lines when mentioned in the schedule.
+                    Floater is auto-detected when cork (CORK…), muslet (MUS…), and hood (HOOD…) closures are all present.
                     Quantity: bottling/canning = ordered × pack size (e.g. 500 × 6PK = 3,000 bottles).
                     Kegging = ordered quantity is keg count.
                   </p>
@@ -296,6 +305,7 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
                       <th className="px-3 py-2 font-medium">Pack</th>
                       <th className="px-3 py-2 font-medium">Total</th>
                       <th className="px-3 py-2 font-medium">Divider</th>
+                      <th className="px-3 py-2 font-medium">Floater</th>
                       <th className="px-3 py-2" />
                     </tr>
                   </thead>
@@ -423,6 +433,22 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
                                   }
                                 />
                                 {row.divider_required && <Badge variant="amber">Yes</Badge>}
+                              </label>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {isBottling ? (
+                              <label className="flex items-center gap-1 text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={row.floater_required}
+                                  onChange={(e) =>
+                                    updateRow(row.rowId, { floater_required: e.target.checked })
+                                  }
+                                />
+                                {row.floater_required && <Badge variant="amber">Yes</Badge>}
                               </label>
                             ) : (
                               <span className="text-slate-300">—</span>
