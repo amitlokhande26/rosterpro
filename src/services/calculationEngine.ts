@@ -189,6 +189,174 @@ export function getStaffingForLine(
   return result;
 }
 
+function getShiftJobsForLine(
+  jobs: ProductionJob[],
+  lineId: string,
+  shiftDate: string,
+  shiftId: string,
+  shifts: Shift[],
+  lineMap: Map<string, string>,
+): ProductionJob[] {
+  const lineName = lineMap.get(lineId);
+  return jobs.filter((j) => {
+    if (j.production_line_id !== lineId) return false;
+    return getShiftsTouchedByJob(
+      j.start_date,
+      j.start_time,
+      j.runtime_hours,
+      shifts,
+      lineName,
+    ).some((s) => s.shift_date === shiftDate && s.shift_id === shiftId);
+  });
+}
+
+function getJobActiveIntervalOnShift(
+  job: ProductionJob,
+  shiftDate: string,
+  shift: Shift,
+): { start: Date; end: Date } | null {
+  const jobStart = combineDateAndTime(job.start_date, job.start_time);
+  const jobEnd = parseISO(job.end_datetime);
+  const { start: shiftStart, end: shiftEnd } = getShiftInterval(shiftDate, shift);
+
+  const start = jobStart > shiftStart ? jobStart : shiftStart;
+  const end = jobEnd < shiftEnd ? jobEnd : shiftEnd;
+  if (start >= end) return null;
+  return { start, end };
+}
+
+function expandLinePositions(
+  lineId: string,
+  lineName: string,
+  staffing: ReturnType<typeof getStaffingForLine>,
+): PositionRequirement[] {
+  const result: PositionRequirement[] = [];
+  for (const s of staffing) {
+    for (let i = 0; i < s.quantity; i++) {
+      result.push({
+        position: s.position,
+        quantity: 1,
+        production_line_id: lineId,
+        production_line_name: lineName,
+      });
+    }
+  }
+  return result;
+}
+
+function getLinePositionsForShift(
+  lineId: string,
+  shiftDate: string,
+  shiftId: string,
+  jobs: ProductionJob[],
+  templates: StaffingTemplate[],
+  shifts: Shift[],
+  lineMap: Map<string, string>,
+): PositionRequirement[] {
+  const lineName = lineMap.get(lineId) ?? 'Unknown';
+  const shiftJobs = getShiftJobsForLine(jobs, lineId, shiftDate, shiftId, shifts, lineMap);
+  const dividerRequired = shiftJobs.some((j) => j.divider_required);
+  const floaterRequired = shiftJobs.some((j) => j.floater_required);
+  const staffing = getStaffingForLine(
+    lineId,
+    templates,
+    dividerRequired,
+    floaterRequired,
+  );
+  return expandLinePositions(lineId, lineName, staffing);
+}
+
+/** Peak concurrent headcount — sequential line handoffs count one crew, overlaps sum crews. */
+function computePeakConcurrentPositions(
+  shiftDate: string,
+  shiftId: string,
+  lineIds: string[],
+  jobs: ProductionJob[],
+  templates: StaffingTemplate[],
+  shifts: Shift[],
+  lineMap: Map<string, string>,
+): PositionRequirement[] {
+  const shift = shifts.find((s) => s.id === shiftId);
+  if (!shift || lineIds.length === 0) return [];
+
+  type TimelineEvent = { time: number; type: 'start' | 'end'; lineId: string };
+  const events: TimelineEvent[] = [];
+
+  for (const lineId of lineIds) {
+    const shiftJobs = getShiftJobsForLine(jobs, lineId, shiftDate, shiftId, shifts, lineMap);
+    for (const job of shiftJobs) {
+      const interval = getJobActiveIntervalOnShift(job, shiftDate, shift);
+      if (!interval) continue;
+      events.push({ time: interval.start.getTime(), type: 'start', lineId });
+      events.push({ time: interval.end.getTime(), type: 'end', lineId });
+    }
+  }
+
+  if (events.length === 0) {
+    let peak: PositionRequirement[] = [];
+    for (const lineId of lineIds) {
+      const positions = getLinePositionsForShift(
+        lineId,
+        shiftDate,
+        shiftId,
+        jobs,
+        templates,
+        shifts,
+        lineMap,
+      );
+      if (positions.length > peak.length) peak = positions;
+    }
+    return peak;
+  }
+
+  events.sort((a, b) => {
+    if (a.time !== b.time) return a.time - b.time;
+    if (a.type === 'end' && b.type === 'start') return -1;
+    if (a.type === 'start' && b.type === 'end') return 1;
+    return 0;
+  });
+
+  const lineRefCount = new Map<string, number>();
+  const activeLines = new Set<string>();
+  let peakPositions: PositionRequirement[] = [];
+
+  for (const event of events) {
+    const count = lineRefCount.get(event.lineId) ?? 0;
+    if (event.type === 'start') {
+      lineRefCount.set(event.lineId, count + 1);
+      activeLines.add(event.lineId);
+    } else {
+      const next = count - 1;
+      if (next <= 0) {
+        lineRefCount.delete(event.lineId);
+        activeLines.delete(event.lineId);
+      } else {
+        lineRefCount.set(event.lineId, next);
+      }
+    }
+
+    const current: PositionRequirement[] = [];
+    for (const lineId of activeLines) {
+      current.push(
+        ...getLinePositionsForShift(
+          lineId,
+          shiftDate,
+          shiftId,
+          jobs,
+          templates,
+          shifts,
+          lineMap,
+        ),
+      );
+    }
+    if (current.length > peakPositions.length) {
+      peakPositions = current;
+    }
+  }
+
+  return peakPositions;
+}
+
 export function aggregateStaffingRequirements(
   jobs: ProductionJob[],
   requirements: Array<{ shift_date: string; shift_id: string; production_line_id: string }>,
@@ -203,7 +371,6 @@ export function aggregateStaffingRequirements(
     shift_id: string;
     lines: Set<string>;
     line_optional_roles: Map<string, Set<string>>;
-    positions: PositionRequirement[];
   }>();
 
   for (const req of requirements) {
@@ -214,66 +381,49 @@ export function aggregateStaffingRequirements(
         shift_id: req.shift_id,
         lines: new Set(),
         line_optional_roles: new Map(),
-        positions: [],
       });
     }
     const group = grouped.get(key)!;
 
-    // Only count staffing once per line per shift (not per overlapping job)
     if (group.lines.has(req.production_line_id)) continue;
     group.lines.add(req.production_line_id);
 
-    const lineJobs = jobs.filter((j) => j.production_line_id === req.production_line_id);
-    const shiftJobs = lineJobs.filter((j) =>
-      getShiftsTouchedByJob(
-        j.start_date,
-        j.start_time,
-        j.runtime_hours,
-        shifts,
-        lineMap.get(j.production_line_id),
-      ).some(
-        (s) => s.shift_date === req.shift_date && s.shift_id === req.shift_id,
-      ),
+    const shiftJobs = getShiftJobsForLine(
+      jobs,
+      req.production_line_id,
+      req.shift_date,
+      req.shift_id,
+      shifts,
+      lineMap,
     );
-
-    const dividerRequired = shiftJobs.some((j) => j.divider_required);
-    const floaterRequired = shiftJobs.some((j) => j.floater_required);
 
     const roles = group.line_optional_roles.get(req.production_line_id) ?? new Set<string>();
-    if (dividerRequired) roles.add('Divider');
-    if (floaterRequired) roles.add('Floater');
+    if (shiftJobs.some((j) => j.divider_required)) roles.add('Divider');
+    if (shiftJobs.some((j) => j.floater_required)) roles.add('Floater');
     group.line_optional_roles.set(req.production_line_id, roles);
-
-    const staffing = getStaffingForLine(
-      req.production_line_id,
-      templates,
-      dividerRequired,
-      floaterRequired,
-    );
-
-    for (const s of staffing) {
-      for (let i = 0; i < s.quantity; i++) {
-        group.positions.push({
-          position: s.position,
-          quantity: 1,
-          production_line_id: req.production_line_id,
-          production_line_name: lineMap.get(req.production_line_id) ?? 'Unknown',
-        });
-      }
-    }
   }
 
   const summaries: ShiftStaffingSummary[] = [];
 
   for (const [, group] of grouped) {
+    const positions = computePeakConcurrentPositions(
+      group.shift_date,
+      group.shift_id,
+      [...group.lines],
+      jobs,
+      templates,
+      shifts,
+      lineMap,
+    );
+
     const required_staff = {} as Record<SkillType, number>;
     for (const skill of SKILLS) {
       required_staff[skill] = 0;
     }
-    for (const p of group.positions) {
+    for (const p of positions) {
       required_staff[p.position] += p.quantity;
     }
-    const total_required = group.positions.length;
+    const total_required = positions.length;
 
     summaries.push({
       shift_date: group.shift_date,
@@ -288,7 +438,7 @@ export function aggregateStaffingRequirements(
       total_required,
       assigned: 0,
       vacancies: total_required,
-      positions: group.positions,
+      positions,
       status: 'incomplete',
     });
   }
