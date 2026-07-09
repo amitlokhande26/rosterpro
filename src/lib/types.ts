@@ -164,11 +164,17 @@ export interface PositionRequirement {
   production_line_name: string;
 }
 
+export interface LineRunDetail {
+  line_name: string;
+  optional_roles: string[];
+}
+
 export interface ShiftStaffingSummary {
   shift_date: string;
   shift_id: string;
   shift_name: string;
   running_lines: string[];
+  running_line_details: LineRunDetail[];
   required_staff: Record<SkillType, number>;
   total_required: number;
   assigned: number;
@@ -233,6 +239,7 @@ export interface RosterCell {
   shift_name: string;
   status: RosterCellStatus;
   running_lines: string[];
+  running_line_details: LineRunDetail[];
   staffing: ShiftStaffingSummary | null;
   assignments: Array<{
     line_name: string;

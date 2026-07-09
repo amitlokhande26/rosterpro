@@ -202,6 +202,7 @@ export function aggregateStaffingRequirements(
     shift_date: string;
     shift_id: string;
     lines: Set<string>;
+    line_optional_roles: Map<string, Set<string>>;
     positions: PositionRequirement[];
   }>();
 
@@ -212,6 +213,7 @@ export function aggregateStaffingRequirements(
         shift_date: req.shift_date,
         shift_id: req.shift_id,
         lines: new Set(),
+        line_optional_roles: new Map(),
         positions: [],
       });
     }
@@ -236,6 +238,11 @@ export function aggregateStaffingRequirements(
 
     const dividerRequired = shiftJobs.some((j) => j.divider_required);
     const floaterRequired = shiftJobs.some((j) => j.floater_required);
+
+    const roles = group.line_optional_roles.get(req.production_line_id) ?? new Set<string>();
+    if (dividerRequired) roles.add('Divider');
+    if (floaterRequired) roles.add('Floater');
+    group.line_optional_roles.set(req.production_line_id, roles);
 
     const staffing = getStaffingForLine(
       req.production_line_id,
@@ -273,6 +280,10 @@ export function aggregateStaffingRequirements(
       shift_id: group.shift_id,
       shift_name: shiftMap.get(group.shift_id) ?? 'Unknown',
       running_lines: [...group.lines].map((id) => lineMap.get(id) ?? 'Unknown'),
+      running_line_details: [...group.lines].map((id) => ({
+        line_name: lineMap.get(id) ?? 'Unknown',
+        optional_roles: [...(group.line_optional_roles.get(id) ?? [])],
+      })),
       required_staff,
       total_required,
       assigned: 0,
@@ -522,6 +533,7 @@ export function buildRosterBoard(
         shift_name: shift.name,
         status,
         running_lines: summary?.running_lines ?? [],
+        running_line_details: summary?.running_line_details ?? [],
         staffing: summary ?? null,
         assignments: shiftAssignments,
       };

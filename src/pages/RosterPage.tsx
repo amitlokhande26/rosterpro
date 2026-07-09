@@ -185,26 +185,23 @@ export function RosterPage() {
                   {row.map((cell) => (
                     <td key={`${cell.shift_date}-${cell.shift_id}`} className="p-2 align-top">
                       <div className={`min-h-[120px] rounded-lg border p-3 ${getCellStatusColor(cell.status)}`}>
-                        {cell.running_lines.length > 0 ? (
+                        {cell.running_line_details.length > 0 ? (
                           <>
                             <p className="text-xs font-semibold uppercase tracking-wide opacity-70">Lines</p>
-                            <ul className="mt-1 space-y-0.5">
-                              {cell.running_lines.map((line, i) => (
-                                <li key={i} className="text-xs font-medium">{line}</li>
+                            <ul className="mt-1 space-y-1">
+                              {cell.running_line_details.map((line) => (
+                                <li key={line.line_name} className="text-xs font-medium leading-snug">
+                                  {line.line_name}
+                                  {line.optional_roles.length > 0 && (
+                                    <span className="font-normal text-wine-800">
+                                      {' '}— {line.optional_roles.join(', ')}
+                                    </span>
+                                  )}
+                                </li>
                               ))}
                             </ul>
-                            {cell.staffing && (
-                              <div className="mt-2 border-t border-current/20 pt-2">
-                                <p className="text-xs opacity-70">
-                                  Staff: {cell.staffing.assigned}/{cell.staffing.total_required}
-                                </p>
-                                {cell.staffing.vacancies > 0 && (
-                                  <Badge variant="amber">{cell.staffing.vacancies} open</Badge>
-                                )}
-                              </div>
-                            )}
                             {cell.assignments.length > 0 && (
-                              <div className="mt-2 space-y-0.5">
+                              <div className="mt-2 space-y-0.5 border-t border-current/20 pt-2">
                                 {cell.assignments.slice(0, 4).map((a, i) => (
                                   <p key={i} className="truncate text-xs">
                                     {a.position}: {a.employee_name}
@@ -215,6 +212,15 @@ export function RosterPage() {
                                 )}
                               </div>
                             )}
+                          </>
+                        ) : cell.running_lines.length > 0 ? (
+                          <>
+                            <p className="text-xs font-semibold uppercase tracking-wide opacity-70">Lines</p>
+                            <ul className="mt-1 space-y-0.5">
+                              {cell.running_lines.map((line, i) => (
+                                <li key={i} className="text-xs font-medium">{line}</li>
+                              ))}
+                            </ul>
                           </>
                         ) : (
                           <p className="text-xs font-medium opacity-70">No Production</p>
@@ -288,7 +294,14 @@ function ShiftRequirementSummaries({
               <div>
                 <p className="text-xs font-medium uppercase text-slate-500">Running Lines</p>
                 <ul className="mt-1 text-sm text-slate-700">
-                  {s.running_lines.map((l, i) => <li key={i}>• {l}</li>)}
+                  {s.running_line_details.map((l) => (
+                    <li key={l.line_name}>
+                      • {l.line_name}
+                      {l.optional_roles.length > 0 && (
+                        <span className="text-wine-700"> — {l.optional_roles.join(', ')}</span>
+                      )}
+                    </li>
+                  ))}
                 </ul>
               </div>
               <div>
