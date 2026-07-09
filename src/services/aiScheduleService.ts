@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { settingsService } from './settingsService';
 import { parseOuterPackSize, detectPackFromText, normalizePackLabel } from './quantityService';
-import { detectFloaterRequired } from './closureService';
+import { detectFloaterRequired, parseClosureInputFromAiJob } from './closureService';
 import type { ProductionLine } from '@/lib/types';
 
 export interface AiExtractedJob {
@@ -31,11 +31,13 @@ const PROMPT = `You are a production schedule data extractor for a wine bottling
 Read the uploaded schedule (image, PDF, or spreadsheet data) and extract EVERY production job visible.
 
 Valid production line names (match as closely as possible):
-- Bottling Line 1
-- Bottling Line 2
+- Bottling Line 1 (also BOTLINE1, BOT LINE 1)
+- Bottling Line 2 (also BOTLINE2, BOT LINE 2, "1MOOR / BOTLINE2")
 - Canning Line 1
 - Canning Line 2
 - Kegging Line
+
+CRITICAL — extract EVERY row in the schedule table as a separate job. Do not merge rows.
 
 For each job extract:
 - production_line: exact line name from the list above (best match)
@@ -63,11 +65,12 @@ IMPORTANT — Divider detection for bottling lines:
 
 IMPORTANT — Floater detection for bottling lines (closure columns):
 - Schedules often have columns: Closure, Closure Middle, Closure Final.
-- Cork codes start with CORK (example: CORKSPKAGGLPM).
-- Muslet codes start with MUS (example: MUSPLAINSILVER).
-- Hood codes start with HOOD (example: HOODGOLDUV).
-- Codes change per run but the prefixes identify the closure type.
-- floater_required is true ONLY when all three types are present for that bottling run. Otherwise false.
+- Cork codes start with CORK (example: CORKSPKAGGLOM). CROWN codes are NOT cork — do not count CROWNSPKPRINT as cork.
+- Muslet codes start with MUS (example: MUSPLAINSILVER, MUSPLAINGOLD).
+- Hood codes start with HOOD (example: HOODGOLDUV, HOODSILVERUV).
+- NA or N/A in a closure column means that closure type is missing for that row.
+- For EACH row, copy the exact values from Closure, Closure Middle, and Closure Final into closure, closure_middle, closure_final fields.
+- floater_required is true ONLY when all three types are present for that bottling row (cork + muslet + hood). Rows with only cork + muslet but no hood = false.
 
 Return ONLY valid JSON:
 {
@@ -159,21 +162,9 @@ function resolvePackFields(j: AiExtractedJob): {
 
 function detectFloaterFromClosures(
   productionLine: string,
-  input: {
-    product_name: string;
-    notes?: string;
-    closure?: string | null;
-    closure_middle?: string | null;
-    closure_final?: string | null;
-  },
+  raw: Record<string, unknown>,
 ): boolean {
-  return detectFloaterRequired(productionLine, {
-    product_name: input.product_name,
-    notes: input.notes,
-    closure: input.closure,
-    closure_middle: input.closure_middle,
-    closure_final: input.closure_final,
-  });
+  return detectFloaterRequired(productionLine, parseClosureInputFromAiJob(raw));
 }
 
 function parseAiResponse(content: string): AiScheduleResult {
@@ -187,28 +178,24 @@ function parseAiResponse(content: string): AiScheduleResult {
   const jobs = parsed.jobs
     .filter((j) => j.product_name?.trim())
     .map((j) => {
+      const raw = j as unknown as Record<string, unknown>;
+      const closureInput = parseClosureInputFromAiJob(raw);
       const job: AiExtractedJob = {
         production_line: String(j.production_line ?? '').trim(),
         product_name: String(j.product_name).trim(),
         start_date: normalizeDate(String(j.start_date ?? '')),
         start_time: normalizeTime(String(j.start_time ?? '')),
         runtime_hours: Number(j.runtime_hours) || 0,
-        notes: j.notes ? String(j.notes) : '',
+        notes: closureInput.notes ?? '',
         divider_required: detectDividerFromText({
           ...j,
           production_line: String(j.production_line ?? ''),
           product_name: String(j.product_name ?? ''),
         }),
-        floater_required: detectFloaterFromClosures(
-          String(j.production_line ?? ''),
-          {
-            product_name: String(j.product_name ?? ''),
-            notes: j.notes ? String(j.notes) : '',
-            closure: j.closure ? String(j.closure).trim() : null,
-            closure_middle: j.closure_middle ? String(j.closure_middle).trim() : null,
-            closure_final: j.closure_final ? String(j.closure_final).trim() : null,
-          },
-        ),
+        floater_required: detectFloaterFromClosures(String(j.production_line ?? ''), raw),
+        closure: closureInput.closure,
+        closure_middle: closureInput.closure_middle,
+        closure_final: closureInput.closure_final,
         quantity_ordered: parseQuantity(j.quantity_ordered),
         ...resolvePackFields({
           ...j,
@@ -263,6 +250,14 @@ export function matchLineName(
   lines: ProductionLine[],
 ): ProductionLine | undefined {
   if (!detected) return undefined;
+  const compact = detected.toLowerCase().replace(/\s+/g, '');
+  const botlineMatch = compact.match(/botline([12])/);
+  if (botlineMatch) {
+    const target = `bottling line ${botlineMatch[1]}`;
+    const matched = lines.find((l) => l.name.toLowerCase() === target);
+    if (matched) return matched;
+  }
+
   const lower = detected.toLowerCase();
   return (
     lines.find((l) => l.name.toLowerCase() === lower) ??

@@ -3,7 +3,7 @@ import { X, Check, AlertCircle, Camera, FileUp, Sparkles, Trash2 } from 'lucide-
 import { Button, Badge } from '@/components/ui';
 import { QuantityDisplay } from '@/components/QuantityDisplay';
 import { extractScheduleWithAI, matchLineName, validateScheduleFile } from '@/services/aiScheduleService';
-import { detectFloaterRequired } from '@/services/closureService';
+import { detectFloaterRequired, parseClosureInputFromAiJob } from '@/services/closureService';
 import {
   resolveJobQuantities,
   isKeggingLine,
@@ -77,13 +77,13 @@ export function OcrUploadModal({ lines, onConfirmAll, onClose }: OcrUploadModalP
           job.divider_required ??
           (/bottling line/i.test(lineName) &&
             /\bdivider\b/i.test(`${job.product_name} ${job.notes ?? ''}`));
-        const floaterRequired = detectFloaterRequired(lineName, {
+        const floaterRequired = detectFloaterRequired(lineName, parseClosureInputFromAiJob({
           product_name: job.product_name,
           notes: job.notes,
           closure: job.closure,
           closure_middle: job.closure_middle,
           closure_final: job.closure_final,
-        });
+        }));
 
         return applyQuantityToRow(
           {
