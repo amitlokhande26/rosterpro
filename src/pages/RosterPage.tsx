@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { format, parseISO, addWeeks, subWeeks } from 'date-fns';
 import { Camera, Check, ChevronLeft, ChevronRight, Filter, FolderOpen } from 'lucide-react';
-import html2canvas from 'html2canvas';
+import { domToBlob } from 'modern-screenshot';
 import { Card, LoadingSpinner, Badge } from '@/components/ui';
 import { useAppData } from '@/hooks/useAppData';
 import { cn } from '@/lib/utils';
@@ -127,19 +127,13 @@ export function RosterPage() {
     if (scrollArea) scrollArea.style.overflow = 'visible';
 
     try {
-      const canvas = await html2canvas(target, {
+      // modern-screenshot supports Tailwind v4 oklch() colors (html2canvas does not)
+      const blob = await domToBlob(target, {
         backgroundColor: '#ffffff',
         scale: 2,
-        useCORS: true,
-        logging: false,
       });
 
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((b) => {
-          if (b) resolve(b);
-          else reject(new Error('Failed to create PNG blob'));
-        }, 'image/png');
-      });
+      if (!blob) throw new Error('Failed to create PNG blob');
 
       const filename = buildSnapshotFilename();
 
