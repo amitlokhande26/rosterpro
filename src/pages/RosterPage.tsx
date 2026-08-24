@@ -1,6 +1,6 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { format, parseISO, addWeeks, subWeeks } from 'date-fns';
-import { Camera, ChevronLeft, ChevronRight, Filter } from 'lucide-react';
+import { Camera, Check, ChevronLeft, ChevronRight, Filter, FolderOpen } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { Card, LoadingSpinner, Badge } from '@/components/ui';
 import { useAppData } from '@/hooks/useAppData';
@@ -15,20 +15,38 @@ import {
 } from '@/services/calculationEngine';
 import { ALL_SKILLS } from '@/lib/types';
 
-/** e.g. Mon_28/09/26_0932 — Day_DD/MM/YY_HHMM (24h). Slashes kept as requested. */
+/** Survives closing dialogs until the tab is reloaded (same pattern as weight-check app). */
+let savedDirHandle: FileSystemDirectoryHandle | null = null;
+
+/** Clock time at save: `DD-MM-YYYY ; HH.MM.png` (en-GB), same as weight-check app. */
 function buildSnapshotFilename(now = new Date()): string {
-  const day = format(now, 'EEE');
-  const date = format(now, 'dd/MM/yy');
-  const time = format(now, 'HHmm');
-  return `${day}_${date}_${time}.png`;
+  const dateStr = now
+    .toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    .replace(/\//g, '-');
+  const timeStr = now
+    .toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
+    .replace(/:/g, '.');
+  return `${dateStr} ; ${timeStr}.png`;
 }
+
+type ToastState = { type: 'success' | 'error'; message: string } | null;
 
 export function RosterPage() {
   const { loading, shifts, lines, templates, employees, jobs, requirements, assignments } = useAppData();
   const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
   const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
-  const [snapshotBusy, setSnapshotBusy] = useState(false);
+  const [folderSelected, setFolderSelected] = useState(() => !!savedDirHandle);
+  const [isSaving, setIsSaving] = useState(false);
+  const [toast, setToast] = useState<ToastState>(null);
   const snapshotRef = useRef<HTMLDivElement>(null);
+
+  const isFileSystemSupported =
+    typeof window !== 'undefined' && 'showDirectoryPicker' in window;
+
+  const showToast = useCallback((type: 'success' | 'error', message: string) => {
+    setToast({ type, message });
+    window.setTimeout(() => setToast(null), 3500);
+  }, []);
 
   useEffect(() => {
     if (lines.length > 0 && selectedLineIds.size === 0) {
@@ -86,11 +104,24 @@ export function RosterPage() {
     full: format(parseISO(d), 'dd MMM'),
   }));
 
-  const downloadSnapshot = useCallback(async () => {
-    const target = snapshotRef.current;
-    if (!target || snapshotBusy) return;
+  const selectFolder = useCallback(async () => {
+    try {
+      // Chromium File System Access API (Chrome/Edge)
+      savedDirHandle = await (window as unknown as {
+        showDirectoryPicker: () => Promise<FileSystemDirectoryHandle>;
+      }).showDirectoryPicker();
+      setFolderSelected(true);
+      showToast('success', 'Folder selected! Screenshots will be saved there.');
+    } catch {
+      // User cancelled — keep existing handle if any
+    }
+  }, [showToast]);
 
-    setSnapshotBusy(true);
+  const saveScreenshot = useCallback(async () => {
+    const target = snapshotRef.current;
+    if (!target || isSaving) return;
+
+    setIsSaving(true);
     const scrollArea = target.querySelector('.overflow-x-auto') as HTMLElement | null;
     const prevOverflow = scrollArea?.style.overflow ?? '';
     if (scrollArea) scrollArea.style.overflow = 'visible';
@@ -101,45 +132,93 @@ export function RosterPage() {
         scale: 2,
         useCORS: true,
         logging: false,
-        scrollX: -window.scrollX,
-        scrollY: -window.scrollY,
-        windowWidth: Math.max(target.scrollWidth, target.offsetWidth),
-        windowHeight: Math.max(target.scrollHeight, target.offsetHeight),
       });
 
-      const link = document.createElement('a');
-      link.download = buildSnapshotFilename();
-      link.href = canvas.toDataURL('image/png');
-      link.click();
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((b) => {
+          if (b) resolve(b);
+          else reject(new Error('Failed to create PNG blob'));
+        }, 'image/png');
+      });
+
+      const filename = buildSnapshotFilename();
+
+      if (savedDirHandle && isFileSystemSupported) {
+        const fileHandle = await savedDirHandle.getFileHandle(filename, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        showToast('success', `Screenshot saved: ${filename}`);
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        showToast('success', `Screenshot downloaded: ${filename}`);
+      }
     } catch (err) {
       console.error('Roster snapshot failed', err);
+      showToast('error', 'Failed to save screenshot');
     } finally {
       if (scrollArea) scrollArea.style.overflow = prevOverflow;
-      setSnapshotBusy(false);
+      setIsSaving(false);
     }
-  }, [snapshotBusy]);
+  }, [isSaving, isFileSystemSupported, showToast]);
 
   if (loading) return <LoadingSpinner />;
 
   return (
     <div className="space-y-6">
+      {toast && (
+        <div
+          className={cn(
+            'fixed right-4 top-4 z-50 max-w-sm rounded-lg border px-4 py-3 text-sm shadow-lg',
+            toast.type === 'success'
+              ? 'border-green-200 bg-green-50 text-green-900'
+              : 'border-red-200 bg-red-50 text-red-900',
+          )}
+          role="status"
+        >
+          {toast.message}
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Roster Board</h1>
           <p className="text-slate-500">Weekly staffing overview</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {isFileSystemSupported && (
+            <button
+              type="button"
+              onClick={selectFolder}
+              className={cn(
+                'inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium',
+                folderSelected
+                  ? 'border-green-200 bg-green-50 text-green-800 hover:bg-green-100'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+              )}
+            >
+              {folderSelected ? <Check className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}
+              {folderSelected ? 'Folder Selected' : 'Select Save Folder'}
+            </button>
+          )}
           <button
             type="button"
-            onClick={downloadSnapshot}
-            disabled={snapshotBusy}
+            onClick={saveScreenshot}
+            disabled={isSaving}
             className={cn(
               'inline-flex items-center gap-2 rounded-lg border border-wine-200 bg-wine-50 px-3 py-2 text-sm font-medium text-wine-800 hover:bg-wine-100',
-              snapshotBusy && 'cursor-wait opacity-70',
+              isSaving && 'cursor-wait opacity-70',
             )}
           >
             <Camera className="h-4 w-4" />
-            {snapshotBusy ? 'Capturing…' : 'Snapshot'}
+            {isSaving ? 'Saving…' : 'Save Screenshot'}
           </button>
           <button
             onClick={() => setWeekStart(subWeeks(weekStart, 1))}
