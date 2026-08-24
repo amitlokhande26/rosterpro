@@ -1,6 +1,7 @@
-import { useMemo, useState, useCallback, useEffect } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { format, parseISO, addWeeks, subWeeks } from 'date-fns';
-import { ChevronLeft, ChevronRight, Filter } from 'lucide-react';
+import { Camera, ChevronLeft, ChevronRight, Filter } from 'lucide-react';
+import html2canvas from 'html2canvas';
 import { Card, LoadingSpinner, Badge } from '@/components/ui';
 import { useAppData } from '@/hooks/useAppData';
 import { cn } from '@/lib/utils';
@@ -14,10 +15,20 @@ import {
 } from '@/services/calculationEngine';
 import { ALL_SKILLS } from '@/lib/types';
 
+/** e.g. Mon_28/09/26_0932 — Day_DD/MM/YY_HHMM (24h). Slashes kept as requested. */
+function buildSnapshotFilename(now = new Date()): string {
+  const day = format(now, 'EEE');
+  const date = format(now, 'dd/MM/yy');
+  const time = format(now, 'HHmm');
+  return `${day}_${date}_${time}.png`;
+}
+
 export function RosterPage() {
   const { loading, shifts, lines, templates, employees, jobs, requirements, assignments } = useAppData();
   const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
   const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+  const [snapshotBusy, setSnapshotBusy] = useState(false);
+  const snapshotRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (lines.length > 0 && selectedLineIds.size === 0) {
@@ -75,6 +86,39 @@ export function RosterPage() {
     full: format(parseISO(d), 'dd MMM'),
   }));
 
+  const downloadSnapshot = useCallback(async () => {
+    const target = snapshotRef.current;
+    if (!target || snapshotBusy) return;
+
+    setSnapshotBusy(true);
+    const scrollArea = target.querySelector('.overflow-x-auto') as HTMLElement | null;
+    const prevOverflow = scrollArea?.style.overflow ?? '';
+    if (scrollArea) scrollArea.style.overflow = 'visible';
+
+    try {
+      const canvas = await html2canvas(target, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        scrollX: -window.scrollX,
+        scrollY: -window.scrollY,
+        windowWidth: Math.max(target.scrollWidth, target.offsetWidth),
+        windowHeight: Math.max(target.scrollHeight, target.offsetHeight),
+      });
+
+      const link = document.createElement('a');
+      link.download = buildSnapshotFilename();
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } catch (err) {
+      console.error('Roster snapshot failed', err);
+    } finally {
+      if (scrollArea) scrollArea.style.overflow = prevOverflow;
+      setSnapshotBusy(false);
+    }
+  }, [snapshotBusy]);
+
   if (loading) return <LoadingSpinner />;
 
   return (
@@ -84,7 +128,19 @@ export function RosterPage() {
           <h1 className="text-2xl font-bold text-slate-900">Roster Board</h1>
           <p className="text-slate-500">Weekly staffing overview</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={downloadSnapshot}
+            disabled={snapshotBusy}
+            className={cn(
+              'inline-flex items-center gap-2 rounded-lg border border-wine-200 bg-wine-50 px-3 py-2 text-sm font-medium text-wine-800 hover:bg-wine-100',
+              snapshotBusy && 'cursor-wait opacity-70',
+            )}
+          >
+            <Camera className="h-4 w-4" />
+            {snapshotBusy ? 'Capturing…' : 'Snapshot'}
+          </button>
           <button
             onClick={() => setWeekStart(subWeeks(weekStart, 1))}
             className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50"
@@ -147,102 +203,106 @@ export function RosterPage() {
         )}
       </Card>
 
-      <div className="flex flex-wrap gap-3">
-        <div className="flex items-center gap-2 text-xs">
-          <div className="h-3 w-3 rounded bg-green-400" /> Production Running
+      <div ref={snapshotRef} className="space-y-3 rounded-xl bg-white p-1">
+        <div className="px-1 text-sm font-medium text-slate-700">
+          Roster Board — {format(weekStart, 'dd MMM')} – {format(addWeeks(weekStart, 1), 'dd MMM yyyy')}
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <div className="h-3 w-3 rounded bg-slate-300" /> No Production
+        <div className="flex flex-wrap gap-3 px-1">
+          <div className="flex items-center gap-2 text-xs">
+            <div className="h-3 w-3 rounded bg-green-400" /> Production Running
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <div className="h-3 w-3 rounded bg-slate-300" /> No Production
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <div className="h-3 w-3 rounded bg-amber-400" /> Staffing Incomplete
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <div className="h-3 w-3 rounded bg-red-400" /> Understaffed
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <div className="h-3 w-3 rounded bg-amber-400" /> Staffing Incomplete
-        </div>
-        <div className="flex items-center gap-2 text-xs">
-          <div className="h-3 w-3 rounded bg-red-400" /> Understaffed
-        </div>
-      </div>
-
-      <Card className="overflow-hidden p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50">
-                <th className="w-28 px-4 py-3 text-left text-sm font-semibold text-slate-700">Shift</th>
-                {dayLabels.map((d) => (
-                  <th key={d.date} className="px-3 py-3 text-center text-sm font-semibold text-slate-700">
-                    {d.label}
-                    <div className="text-xs font-normal text-slate-500">{d.full}</div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {board.map((row, rowIdx) => (
-                <tr key={rowIdx} className="border-b border-slate-100">
-                  <td className="px-4 py-3 text-sm font-medium text-slate-700">
-                    {row[0]?.shift_name}
-                  </td>
-                  {row.map((cell) => (
-                    <td key={`${cell.shift_date}-${cell.shift_id}`} className="p-2 align-top">
-                      <div className={`min-h-[120px] rounded-lg border p-3 ${getCellStatusColor(cell.status)}`}>
-                        {cell.running_line_details.length > 0 ? (
-                          <>
-                            <p className="text-xs font-semibold uppercase tracking-wide opacity-70">Lines</p>
-                            <ul className="mt-1 space-y-1">
-                              {cell.running_line_details.map((line) => (
-                                <li key={line.line_name} className="text-xs font-medium leading-snug">
-                                  {line.line_name}
-                                  {line.optional_roles.length > 0 && (
-                                    <span className="font-normal text-wine-800">
-                                      {' '}— {line.optional_roles.join(', ')}
-                                    </span>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                            {cell.crew_handoffs.length > 0 && (
-                              <div className="mt-2 space-y-0.5 border-t border-current/20 pt-2">
-                                {cell.crew_handoffs.map((h, i) => (
-                                  <p key={i} className="text-xs font-medium text-wine-900/90">
-                                    {h.from_line} crew to {h.to_line} at {h.at}
-                                  </p>
-                                ))}
-                              </div>
-                            )}
-                            {cell.assignments.length > 0 && (
-                              <div className="mt-2 space-y-0.5 border-t border-current/20 pt-2">
-                                {cell.assignments.slice(0, 4).map((a, i) => (
-                                  <p key={i} className="truncate text-xs">
-                                    {a.position}: {a.employee_name}
-                                  </p>
-                                ))}
-                                {cell.assignments.length > 4 && (
-                                  <p className="text-xs opacity-70">+{cell.assignments.length - 4} more</p>
-                                )}
-                              </div>
-                            )}
-                          </>
-                        ) : cell.running_lines.length > 0 ? (
-                          <>
-                            <p className="text-xs font-semibold uppercase tracking-wide opacity-70">Lines</p>
-                            <ul className="mt-1 space-y-0.5">
-                              {cell.running_lines.map((line, i) => (
-                                <li key={i} className="text-xs font-medium">{line}</li>
-                              ))}
-                            </ul>
-                          </>
-                        ) : (
-                          <p className="text-xs font-medium opacity-70">No Production</p>
-                        )}
-                      </div>
-                    </td>
+        <Card className="overflow-hidden p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="w-28 px-4 py-3 text-left text-sm font-semibold text-slate-700">Shift</th>
+                  {dayLabels.map((d) => (
+                    <th key={d.date} className="px-3 py-3 text-center text-sm font-semibold text-slate-700">
+                      {d.label}
+                      <div className="text-xs font-normal text-slate-500">{d.full}</div>
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+              </thead>
+              <tbody>
+                {board.map((row, rowIdx) => (
+                  <tr key={rowIdx} className="border-b border-slate-100">
+                    <td className="px-4 py-3 text-sm font-medium text-slate-700">
+                      {row[0]?.shift_name}
+                    </td>
+                    {row.map((cell) => (
+                      <td key={`${cell.shift_date}-${cell.shift_id}`} className="p-2 align-top">
+                        <div className={`min-h-[120px] rounded-lg border p-3 ${getCellStatusColor(cell.status)}`}>
+                          {cell.running_line_details.length > 0 ? (
+                            <>
+                              <p className="text-xs font-semibold uppercase tracking-wide opacity-70">Lines</p>
+                              <ul className="mt-1 space-y-1">
+                                {cell.running_line_details.map((line) => (
+                                  <li key={line.line_name} className="text-xs font-medium leading-snug">
+                                    {line.line_name}
+                                    {line.optional_roles.length > 0 && (
+                                      <span className="font-normal text-wine-800">
+                                        {' '}— {line.optional_roles.join(', ')}
+                                      </span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                              {cell.crew_handoffs.length > 0 && (
+                                <div className="mt-2 space-y-0.5 border-t border-current/20 pt-2">
+                                  {cell.crew_handoffs.map((h, i) => (
+                                    <p key={i} className="text-xs font-medium text-wine-900/90">
+                                      {h.from_line} crew to {h.to_line} at {h.at}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                              {cell.assignments.length > 0 && (
+                                <div className="mt-2 space-y-0.5 border-t border-current/20 pt-2">
+                                  {cell.assignments.slice(0, 4).map((a, i) => (
+                                    <p key={i} className="truncate text-xs">
+                                      {a.position}: {a.employee_name}
+                                    </p>
+                                  ))}
+                                  {cell.assignments.length > 4 && (
+                                    <p className="text-xs opacity-70">+{cell.assignments.length - 4} more</p>
+                                  )}
+                                </div>
+                              )}
+                            </>
+                          ) : cell.running_lines.length > 0 ? (
+                            <>
+                              <p className="text-xs font-semibold uppercase tracking-wide opacity-70">Lines</p>
+                              <ul className="mt-1 space-y-0.5">
+                                {cell.running_lines.map((line, i) => (
+                                  <li key={i} className="text-xs font-medium">{line}</li>
+                                ))}
+                              </ul>
+                            </>
+                          ) : (
+                            <p className="text-xs font-medium opacity-70">No Production</p>
+                          )}
+                        </div>
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
 
       <ShiftRequirementSummaries
         weekDates={weekDates}
